@@ -222,6 +222,8 @@ private fun MainScreenContent(
     var extractedPayload by remember { mutableStateOf<UnpackedPayload?>(null) }
     var extractStatusMessage by remember { mutableStateOf<String?>(null) }
     var extractIsError by remember { mutableStateOf(false) }
+    var forceDecode by remember { mutableStateOf(false) }
+    var rawDumpBytes by remember { mutableStateOf<ByteArray?>(null) }
 
     // X-Ray Bit Plane state
     var bitPlaneExpanded by remember { mutableStateOf(false) }
@@ -442,6 +444,27 @@ private fun MainScreenContent(
                     }
                 } catch (e: Exception) {
                     extractStatusMessage = "Failed to save payload: ${e.message}"
+                    extractIsError = true
+                }
+            }
+        }
+    }
+
+    val saveRawDumpPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri: Uri? ->
+        uri?.let {
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    rawDumpBytes?.let { data ->
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            out.write(data)
+                        }
+                        extractStatusMessage = "Raw dump saved successfully (${formatBytes(data.size)})"
+                        extractIsError = false
+                    }
+                } catch (e: Exception) {
+                    extractStatusMessage = "Failed to save raw dump: ${e.message}"
                     extractIsError = true
                 }
             }
@@ -1751,6 +1774,43 @@ private fun MainScreenContent(
                                 }
                             }
 
+                            // Force Decode Switch Card
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(24.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(20.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Force Decode (Bypass Header & CRC)",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = "Bypasses SLOP header and CRC32 verification to extract raw/damaged data",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Switch(
+                                        checked = forceDecode,
+                                        onCheckedChange = { forceDecode = it }
+                                    )
+                                }
+                            }
+
                             if (extractStatusMessage != null) {
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
@@ -1769,43 +1829,11 @@ private fun MainScreenContent(
                             // 56.dp Extract Action Pill
                             Button(
                                 onClick = {
-                                    if (extractCarrierType == CarrierType.TEXT) {
-                                        if (extractInputText.isBlank()) {
-                                            extractStatusMessage = "Please paste text containing hidden data"
-                                            extractIsError = true
-                                            return@Button
-                                        }
-
-                                        isProcessing = true
-                                        extractStatusMessage = null
-                                        extractIsError = false
-                                        extractedPayload = null
-
-                                        coroutineScope.launch {
-                                            try {
-                                                val secretBytes = withContext(Dispatchers.Default) {
-                                                    ZeroWidthStego.decode(
-                                                        text = extractInputText,
-                                                        password = extractPassword.ifEmpty { null }
-                                                    )
-                                                }
-                                                extractedPayload = UnpackedPayload(
-                                                    type = PayloadType.TEXT,
-                                                    data = secretBytes,
-                                                    isEncrypted = extractPassword.isNotEmpty()
-                                                )
-                                                extractStatusMessage = "Secret extracted from text successfully"
-                                                extractIsError = false
-                                            } catch (e: Exception) {
-                                                extractStatusMessage = "Extraction error: ${e.message}"
-                                                extractIsError = true
-                                            } finally {
-                                                isProcessing = false
-                                            }
-                                        }
+                                    if (extractCarrierType == CarrierType.TEXT && extractInputText.isBlank()) {
+                                        extractStatusMessage = "Please paste text containing hidden data"
+                                        extractIsError = true
                                         return@Button
                                     }
-
                                     if (extractCarrierType == CarrierType.IMAGE && extractCarrierBitmap == null) {
                                         extractStatusMessage = "Please select an image carrier"
                                         extractIsError = true
@@ -1821,9 +1849,81 @@ private fun MainScreenContent(
                                     extractStatusMessage = null
                                     extractIsError = false
                                     extractedPayload = null
+                                    rawDumpBytes = null
 
                                     coroutineScope.launch {
                                         try {
+                                            if (forceDecode) {
+                                                val rawBytes: ByteArray = withContext(Dispatchers.Default) {
+                                                    when (extractCarrierType) {
+                                                        CarrierType.IMAGE -> ImageLsbEngine.extractRawBits(extractCarrierBitmap!!, bitsPerUnit)
+                                                        CarrierType.AUDIO -> AudioLsbEngine.extractRawBits(extractCarrierWavBytes!!, bitsPerUnit)
+                                                        CarrierType.TEXT -> {
+                                                            try {
+                                                                ZeroWidthStego.decode(extractInputText, extractPassword.ifEmpty { null })
+                                                            } catch (e: Exception) {
+                                                                val headerIdx = extractInputText.indexOf(ZeroWidthStego.CHAR_HEADER)
+                                                                val bitBuilder = StringBuilder()
+                                                                val startIdx = if (headerIdx != -1) headerIdx + 1 else 0
+                                                                for (i in startIdx until extractInputText.length) {
+                                                                    val c = extractInputText[i]
+                                                                    if (c == ZeroWidthStego.CHAR_ZERO) bitBuilder.append('0')
+                                                                    else if (c == ZeroWidthStego.CHAR_ONE) bitBuilder.append('1')
+                                                                }
+                                                                val bitStr = bitBuilder.toString()
+                                                                val numBytes = bitStr.length / 8
+                                                                val bytes = ByteArray(numBytes)
+                                                                for (bIdx in 0 until numBytes) {
+                                                                    var b = 0
+                                                                    for (bit in 0 until 8) {
+                                                                        b = (b shl 1) or (if (bitStr[bIdx * 8 + bit] == '1') 1 else 0)
+                                                                    }
+                                                                    bytes[bIdx] = b.toByte()
+                                                                }
+                                                                bytes
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                rawDumpBytes = rawBytes
+                                                val forcedPayload = withContext(Dispatchers.Default) {
+                                                    try {
+                                                        StegoProtocol.unpackPayloadForced(rawBytes, extractPassword.ifEmpty { null })
+                                                    } catch (e: Exception) {
+                                                        UnpackedPayload(
+                                                            type = PayloadType.FILE,
+                                                            data = rawBytes,
+                                                            isCorrupted = true
+                                                        )
+                                                    }
+                                                }
+                                                extractedPayload = forcedPayload
+                                                extractStatusMessage = if (forcedPayload.isCorrupted) {
+                                                    "Force decoded (Warning: CRC mismatch or non-SLOP data)"
+                                                } else {
+                                                    "Force decoded successfully"
+                                                }
+                                                extractIsError = false
+                                                return@launch
+                                            }
+
+                                            if (extractCarrierType == CarrierType.TEXT) {
+                                                val secretBytes = withContext(Dispatchers.Default) {
+                                                    ZeroWidthStego.decode(
+                                                        text = extractInputText,
+                                                        password = extractPassword.ifEmpty { null }
+                                                    )
+                                                }
+                                                extractedPayload = UnpackedPayload(
+                                                    type = PayloadType.TEXT,
+                                                    data = secretBytes,
+                                                    isEncrypted = extractPassword.isNotEmpty()
+                                                )
+                                                extractStatusMessage = "Secret extracted from text successfully"
+                                                extractIsError = false
+                                                return@launch
+                                            }
+
                                             val containerBytes = withContext(Dispatchers.Default) {
                                                 if (extractCarrierType == CarrierType.IMAGE) {
                                                     ImageLsbEngine.extract(extractCarrierBitmap!!, bitsPerUnit)
@@ -1875,6 +1975,81 @@ private fun MainScreenContent(
                                 }
                             }
 
+                            // Raw Dump Card (Force Decode)
+                            if (forceDecode && rawDumpBytes != null) {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(24.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                    )
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(20.dp),
+                                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Raw LSB Dump (${formatBytes(rawDumpBytes!!.size)})",
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            if (extractedPayload?.isCorrupted == true) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(10.dp),
+                                                    color = MaterialTheme.colorScheme.errorContainer
+                                                ) {
+                                                    Text(
+                                                        text = "CRC Mismatch",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        val previewText = remember(rawDumpBytes) {
+                                            formatHexDump(rawDumpBytes!!)
+                                        }
+
+                                        Surface(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = MaterialTheme.colorScheme.surfaceContainerHighest
+                                        ) {
+                                            Text(
+                                                text = previewText,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                modifier = Modifier
+                                                    .padding(12.dp)
+                                                    .horizontalScroll(rememberScrollState())
+                                            )
+                                        }
+
+                                        Button(
+                                            onClick = { saveRawDumpPicker.launch("raw_lsb_dump.bin") },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            shape = RoundedCornerShape(28.dp),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = MaterialTheme.colorScheme.primary,
+                                                contentColor = MaterialTheme.colorScheme.onPrimary
+                                            )
+                                        ) {
+                                            Icon(Icons.Default.Download, contentDescription = null)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("Save Raw Dump")
+                                        }
+                                    }
+                                }
+                            }
                             // Result Card
                             if (extractedPayload != null) {
                                 val payload = extractedPayload!!
@@ -2198,4 +2373,26 @@ private fun formatBytes(bytes: Int): String {
     if (kb < 1024) return String.format(Locale.US, "%.1f KB", kb)
     val mb = kb / 1024.0
     return String.format(Locale.US, "%.2f MB", mb)
+}
+
+
+private fun formatHexDump(bytes: ByteArray, maxLines: Int = 16): String {
+    val totalChunks = (bytes.size + 15) / 16
+    val linesToShow = minOf(totalChunks, maxLines)
+    val sb = StringBuilder()
+    for (i in 0 until linesToShow) {
+        val start = i * 16
+        val end = minOf(start + 16, bytes.size)
+        val slice = bytes.copyOfRange(start, end)
+        val hex = slice.joinToString(" ") { "%02X".format(it) }
+        val ascii = slice.map { b ->
+            val c = b.toInt() and 0xFF
+            if (c in 32..126) c.toChar() else '.'
+        }.joinToString("")
+        sb.append("%04X  %-48s  |%s|\n".format(start, hex, ascii))
+    }
+    if (totalChunks > maxLines) {
+        sb.append("... (${bytes.size - maxLines * 16} more bytes)")
+    }
+    return sb.toString()
 }
