@@ -443,13 +443,13 @@ class StegoEngineTest {
         )
         assertEquals(8_000, lowBitrate)
 
-        // Medium capacity: raw = 10_000 * 0.70 * 8 / 5.0 = 11_200 bps -> 11_200
+        // Medium capacity: raw = 10_000 * 0.85 * 8 / 5.0 = 13_600 bps -> 13_600
         val midBitrate = OpusCodecBridge.calculateTargetBitrate(
             durationSeconds = 5.0,
             availableCapacityBytes = 10_000,
             profile = OpusProfile.VOICE
         )
-        assertEquals(11_200, midBitrate)
+        assertEquals(13_600, midBitrate)
 
         // High capacity: raw = 100_000 * 0.70 * 8 / 5.0 = 112_000 bps -> clamps to 24_000
         val highBitrate = OpusCodecBridge.calculateTargetBitrate(
@@ -478,13 +478,13 @@ class StegoEngineTest {
         )
         assertEquals(16_000, lowBitrate)
 
-        // Medium capacity: raw = 30_000 * 0.70 * 8 / 5.0 = 33_600 bps -> 33_600
+        // Medium capacity: raw = 30_000 * 0.85 * 8 / 5.0 = 40_800 bps -> 40_800
         val midBitrate = OpusCodecBridge.calculateTargetBitrate(
             durationSeconds = 5.0,
             availableCapacityBytes = 30_000,
             profile = OpusProfile.MUSIC
         )
-        assertEquals(33_600, midBitrate)
+        assertEquals(40_800, midBitrate)
 
         // High capacity: raw = 200_000 * 0.70 * 8 / 5.0 = 224_000 bps -> clamps to 96_000
         val highBitrate = OpusCodecBridge.calculateTargetBitrate(
@@ -571,5 +571,55 @@ class StegoEngineTest {
         // 5. Out of bounds start & end clamp
         val outOfBounds = OpusCodecBridge.trimPcm(pcm, sampleRate, channels, -2.0, 10.0)
         assertArrayEquals(pcm, outOfBounds)
+    }
+
+    @Test
+    fun testVariableLengthHeaderWithFilenameInImageAndAudio() {
+        val testFilename = "06. noma - Brain Power.opus"
+        val payloadData = "Brain power secret payload for variable header test".toByteArray(Charsets.UTF_8)
+
+        val container = StegoProtocol.packPayload(
+            type = PayloadType.AUDIO,
+            data = payloadData,
+            password = null,
+            bitsPerUnit = 2,
+            fileName = testFilename
+        )
+
+        // 1. Test Image LSB extraction with filename
+        val pixelCount = 10000
+        val pixels = IntArray(pixelCount) { (0xFF shl 24) or (it and 0x00FFFFFF) }
+        val embeddedPixels = ImageLsbEngine.embedInPixels(pixels, container, bitsPerChannel = 2)
+        val extractedFromImage = ImageLsbEngine.extractFromPixels(embeddedPixels, bitsPerChannel = 2)
+
+        val unpackedFromImage = StegoProtocol.unpackPayload(extractedFromImage)
+        assertEquals(PayloadType.AUDIO, unpackedFromImage.type)
+        assertEquals(testFilename, unpackedFromImage.fileName)
+        assertArrayEquals(payloadData, unpackedFromImage.data)
+
+        // 2. Test Audio LSB extraction with filename
+        val sampleCount = 20000
+        val wavBytes = AudioLsbEngine.createSyntheticWav(sampleCount = sampleCount)
+        val embeddedWav = AudioLsbEngine.embed(wavBytes, container, bitsPerSample = 2)
+        val extractedFromAudio = AudioLsbEngine.extract(embeddedWav, bitsPerSample = 2)
+
+        val unpackedFromAudio = StegoProtocol.unpackPayload(extractedFromAudio)
+        assertEquals(PayloadType.AUDIO, unpackedFromAudio.type)
+        assertEquals(testFilename, unpackedFromAudio.fileName)
+        assertArrayEquals(payloadData, unpackedFromAudio.data)
+    }
+
+    @Test
+    fun testResamplePcm16() {
+        // 44100 Hz 1-sec stereo = 44100 frames * 4 bytes = 176400 bytes
+        val inRate = 44100
+        val outRate = 48000
+        val channels = 2
+        val inFrames = 44100
+        val pcm = ByteArray(inFrames * channels * 2)
+
+        val resampled = OpusCodecBridge.resamplePcm16(pcm, inRate, outRate, channels)
+        val expectedOutFrames = 48000
+        assertEquals(expectedOutFrames * channels * 2, resampled.size)
     }
 }

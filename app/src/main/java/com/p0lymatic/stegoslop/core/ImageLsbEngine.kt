@@ -169,13 +169,7 @@ object ImageLsbEngine {
         val mask = (1 shl bitsPerChannel) - 1
         var channelCount = 0
 
-        // Extract 14 bytes header
-        if (capacity < StegoProtocol.HEADER_MIN_LENGTH) {
-            throw IllegalArgumentException("Carrier too small to contain SLOP header")
-        }
-
-        val headerBytes = ByteArray(StegoProtocol.HEADER_MIN_LENGTH)
-        for (i in 0 until StegoProtocol.HEADER_MIN_LENGTH) {
+        fun readByte(): Byte {
             var byteVal = 0
             for (c in 0 until chunksPerByte) {
                 val pixel = pixels[channelCount / 3]
@@ -188,7 +182,17 @@ object ImageLsbEngine {
                 byteVal = (byteVal shl bitsPerChannel) or chunk
                 channelCount++
             }
-            headerBytes[i] = byteVal.toByte()
+            return byteVal.toByte()
+        }
+
+        // Extract 14 bytes header
+        if (capacity < StegoProtocol.HEADER_MIN_LENGTH) {
+            throw IllegalArgumentException("Carrier too small to contain SLOP header")
+        }
+
+        val headerBytes = ByteArray(StegoProtocol.HEADER_MIN_LENGTH)
+        for (i in 0 until StegoProtocol.HEADER_MIN_LENGTH) {
+            headerBytes[i] = readByte()
         }
 
         // Validate SLOP magic
@@ -200,18 +204,31 @@ object ImageLsbEngine {
 
         val flags = headerBytes[5].toInt() and 0xFF
         val isEncrypted = (flags and 0x01) != 0
+        val hasFilename = (flags and StegoProtocol.FLAG_HAS_FILENAME) != 0
         val payloadLength = ((headerBytes[6].toLong() and 0xFF) shl 24) or
                 ((headerBytes[7].toLong() and 0xFF) shl 16) or
                 ((headerBytes[8].toLong() and 0xFF) shl 8) or
                 (headerBytes[9].toLong() and 0xFF)
 
-        val headerSize = if (isEncrypted) {
-            StegoProtocol.HEADER_MIN_LENGTH + StegoProtocol.SALT_LENGTH + StegoProtocol.IV_LENGTH
+        val saltIvBytes = if (isEncrypted) {
+            ByteArray(StegoProtocol.SALT_LENGTH + StegoProtocol.IV_LENGTH) { readByte() }
         } else {
-            StegoProtocol.HEADER_MIN_LENGTH
+            ByteArray(0)
         }
 
-        val totalSize = headerSize + payloadLength
+        val filenameBytes = if (hasFilename) {
+            val nameLen = readByte().toInt() and 0xFF
+            val nameData = ByteArray(nameLen) { readByte() }
+            val nameBlock = ByteArray(1 + nameLen)
+            nameBlock[0] = nameLen.toByte()
+            System.arraycopy(nameData, 0, nameBlock, 1, nameLen)
+            nameBlock
+        } else {
+            ByteArray(0)
+        }
+
+        val totalHeaderSize = StegoProtocol.HEADER_MIN_LENGTH + saltIvBytes.size + filenameBytes.size
+        val totalSize = totalHeaderSize + payloadLength
         if (totalSize < 0 || totalSize > capacity) {
             throw IllegalArgumentException(
                 "Corrupted container: total size $totalSize exceeds carrier capacity $capacity"
@@ -219,22 +236,20 @@ object ImageLsbEngine {
         }
 
         val result = ByteArray(totalSize.toInt())
-        System.arraycopy(headerBytes, 0, result, 0, StegoProtocol.HEADER_MIN_LENGTH)
+        var offset = 0
+        System.arraycopy(headerBytes, 0, result, offset, headerBytes.size)
+        offset += headerBytes.size
+        if (saltIvBytes.isNotEmpty()) {
+            System.arraycopy(saltIvBytes, 0, result, offset, saltIvBytes.size)
+            offset += saltIvBytes.size
+        }
+        if (filenameBytes.isNotEmpty()) {
+            System.arraycopy(filenameBytes, 0, result, offset, filenameBytes.size)
+            offset += filenameBytes.size
+        }
 
-        for (i in StegoProtocol.HEADER_MIN_LENGTH until totalSize.toInt()) {
-            var byteVal = 0
-            for (c in 0 until chunksPerByte) {
-                val pixel = pixels[channelCount / 3]
-                val channelVal = when (channelCount % 3) {
-                    0 -> (pixel ushr 16) and 0xFF
-                    1 -> (pixel ushr 8) and 0xFF
-                    else -> pixel and 0xFF
-                }
-                val chunk = channelVal and mask
-                byteVal = (byteVal shl bitsPerChannel) or chunk
-                channelCount++
-            }
-            result[i] = byteVal.toByte()
+        for (i in offset until totalSize.toInt()) {
+            result[i] = readByte()
         }
 
         return result

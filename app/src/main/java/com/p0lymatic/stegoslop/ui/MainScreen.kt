@@ -103,6 +103,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -239,6 +240,7 @@ private fun MainScreenContent(
     var bitPlaneBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
     // Audio Playback state
+    var showPlayerSheet by remember { mutableStateOf(false) }
     var isPlayingAudio by remember { mutableStateOf(false) }
     var currentAudioTrack by remember { mutableStateOf<AudioTrack?>(null) }
     var currentMediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
@@ -664,6 +666,24 @@ private fun MainScreenContent(
                     )
                 },
                 actions = {
+                    val activeAudioBytes = extractedPayload?.takeIf { it.type == PayloadType.AUDIO }?.data
+                        ?: payloadAudioRawPcmWav
+                        ?: carrierWavBytes
+                        ?: extractCarrierWavBytes
+
+                    if (activeAudioBytes != null) {
+                        IconButton(
+                            onClick = { showPlayerSheet = true },
+                            modifier = Modifier.padding(end = 4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Audiotrack,
+                                contentDescription = "Audio Player",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
                     IconButton(
                         onClick = onOpenAbout,
                         modifier = Modifier.padding(end = 8.dp)
@@ -2329,6 +2349,9 @@ private fun MainScreenContent(
                                             extractedPayload = payload
                                             extractStatusMessage = "Payload extracted successfully"
                                             extractIsError = false
+                                            if (payload.type == PayloadType.AUDIO) {
+                                                showPlayerSheet = true
+                                            }
                                         } catch (e: Exception) {
                                             extractStatusMessage = "Extraction error: ${e.message}"
                                             extractIsError = true
@@ -2543,89 +2566,69 @@ private fun MainScreenContent(
                                                 }
                                             }
                                             PayloadType.AUDIO -> {
-                                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                                    Text(
-                                                        text = "Audio Payload: ${payload.fileName ?: "extracted_audio.opus"} (${formatBytes(payload.data.size)})",
-                                                        style = MaterialTheme.typography.bodyMedium,
-                                                        fontWeight = FontWeight.Medium
-                                                    )
-
-                                                    Button(
-                                                        onClick = {
-                                                            if (isPlayingAudio) {
-                                                                try { currentMediaPlayer?.stop(); currentMediaPlayer?.release(); currentMediaPlayer = null } catch (_: Throwable) {}
-                                                                try { currentAudioTrack?.stop(); currentAudioTrack?.release(); currentAudioTrack = null } catch (_: Throwable) {}
-                                                                isPlayingAudio = false
-                                                            } else {
-                                                                try {
-                                                                    val isWavData = OpusCodecBridge.isWav(payload.data)
-                                                                    val tempSuffix = if (isWavData) ".wav" else ".opus"
-                                                                    val tempPlayFile = File.createTempFile("stego_play_audio_", tempSuffix, context.cacheDir)
-                                                                    tempPlayFile.writeBytes(payload.data)
-
-                                                                    val mp = MediaPlayer()
-                                                                    mp.setDataSource(tempPlayFile.absolutePath)
-                                                                    mp.setOnCompletionListener {
-                                                                        isPlayingAudio = false
-                                                                        try { mp.release() } catch (_: Throwable) {}
-                                                                        tempPlayFile.delete()
-                                                                        currentMediaPlayer = null
-                                                                    }
-                                                                    mp.prepare()
-                                                                    mp.start()
-                                                                    currentMediaPlayer = mp
-                                                                    isPlayingAudio = true
-                                                                } catch (e: Exception) {
-                                                                    // Fallback to AudioTrack PCM WAV playback
-                                                                    try {
-                                                                        val pcmWav = OpusCodecBridge.decodeOpusToPcmWav(context, payload.data)
-                                                                        val info = AudioLsbEngine.parseWav(pcmWav)
-                                                                        val minBuf = AudioTrack.getMinBufferSize(
-                                                                            info.sampleRate,
-                                                                            if (info.numChannels == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO,
-                                                                            AudioFormat.ENCODING_PCM_16BIT
-                                                                        )
-                                                                        val track = AudioTrack(
-                                                                            AudioAttributes.Builder()
-                                                                                .setUsage(AudioAttributes.USAGE_MEDIA)
-                                                                                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                                                                                .build(),
-                                                                            AudioFormat.Builder()
-                                                                                .setSampleRate(info.sampleRate)
-                                                                                .setChannelMask(if (info.numChannels == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO)
-                                                                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                                                                                .build(),
-                                                                            maxOf(minBuf, info.dataSize),
-                                                                            AudioTrack.MODE_STREAM,
-                                                                            AudioManager.AUDIO_SESSION_ID_GENERATE
-                                                                        )
-                                                                        track.play()
-                                                                        track.write(pcmWav, info.dataOffset, info.dataSize)
-                                                                        currentAudioTrack = track
-                                                                        isPlayingAudio = true
-                                                                    } catch (ex: Exception) {
-                                                                        extractStatusMessage = "Playback failed: ${ex.message}"
-                                                                    }
+                                                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                                    val trackTitle = payload.fileName ?: "extracted_audio.opus"
+                                                    Surface(
+                                                        shape = RoundedCornerShape(16.dp),
+                                                        color = MaterialTheme.colorScheme.surfaceContainer,
+                                                        modifier = Modifier.fillMaxWidth()
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.SpaceBetween
+                                                        ) {
+                                                            Row(
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                modifier = Modifier.weight(1f)
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = Icons.Default.Audiotrack,
+                                                                    contentDescription = null,
+                                                                    tint = MaterialTheme.colorScheme.primary,
+                                                                    modifier = Modifier.size(26.dp)
+                                                                )
+                                                                Spacer(modifier = Modifier.width(12.dp))
+                                                                Column {
+                                                                    Text(
+                                                                        text = trackTitle,
+                                                                        style = MaterialTheme.typography.bodyMedium,
+                                                                        fontWeight = FontWeight.SemiBold,
+                                                                        color = MaterialTheme.colorScheme.onSurface,
+                                                                        maxLines = 1,
+                                                                        overflow = TextOverflow.Ellipsis
+                                                                    )
+                                                                    Text(
+                                                                        text = "${formatBytes(payload.data.size)} • Extracted Audio",
+                                                                        style = MaterialTheme.typography.labelSmall,
+                                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                                    )
                                                                 }
                                                             }
-                                                        },
-                                                        modifier = Modifier.fillMaxWidth(),
+                                                        }
+                                                    }
+
+                                                    Button(
+                                                        onClick = { showPlayerSheet = true },
                                                         shape = RoundedCornerShape(28.dp),
                                                         colors = ButtonDefaults.buttonColors(
-                                                            containerColor = if (isPlayingAudio) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                                                        )
+                                                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                                        ),
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .height(48.dp)
                                                     ) {
-                                                        Icon(
-                                                            imageVector = if (isPlayingAudio) Icons.Default.Stop else Icons.Default.PlayArrow,
-                                                            contentDescription = null
-                                                        )
+                                                        Icon(Icons.Default.PlayArrow, contentDescription = null)
                                                         Spacer(modifier = Modifier.width(8.dp))
-                                                        Text(if (isPlayingAudio) "Stop Audio" else "Play Audio")
+                                                        Text("Open in Player", fontWeight = FontWeight.Bold)
                                                     }
 
                                                     Row(
                                                         modifier = Modifier.fillMaxWidth(),
-                                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                                                     ) {
                                                         Button(
                                                             onClick = {
@@ -2752,6 +2755,29 @@ private fun MainScreenContent(
                         }
                     }
                 }
+            }
+        }
+
+        if (showPlayerSheet) {
+            val audioBytesToPlay = extractedPayload?.takeIf { it.type == PayloadType.AUDIO }?.data
+                ?: payloadAudioRawPcmWav
+                ?: carrierWavBytes
+                ?: extractCarrierWavBytes
+
+            val audioTitleToPlay = extractedPayload?.fileName
+                ?: payloadAudioFileName
+                ?: carrierFileName
+                ?: extractCarrierFileName
+                ?: "Audio Track"
+
+            if (audioBytesToPlay != null) {
+                AudioPlayerSheet(
+                    audioBytes = audioBytesToPlay,
+                    audioTitle = audioTitleToPlay,
+                    onDismiss = { showPlayerSheet = false },
+                    onSaveWav = { saveExtractedWavPicker.launch("extracted_audio.wav") },
+                    onSaveOpus = { saveExtractedOpusPicker.launch("extracted_audio.opus") }
+                )
             }
         }
     }

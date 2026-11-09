@@ -40,7 +40,7 @@ object OpusCodecBridge {
         availableCapacityBytes: Int,
         profile: OpusProfile
     ): Int {
-        val safeCapacity = availableCapacityBytes.coerceAtLeast(0) * 0.70
+        val safeCapacity = availableCapacityBytes.coerceAtLeast(0) * 0.85
         val rawBitrate = if (durationSeconds > 0.0 && !durationSeconds.isNaN()) {
             ((safeCapacity * 8.0) / durationSeconds).toInt()
         } else {
@@ -173,6 +173,45 @@ object OpusCodecBridge {
     }
 
     /**
+     * Resamples a 16-bit signed PCM byte array between sample rates using linear interpolation.
+     */
+    fun resamplePcm16(
+        pcmBytes: ByteArray,
+        inSampleRate: Int,
+        outSampleRate: Int,
+        channels: Int
+    ): ByteArray {
+        val effectiveChannels = maxOf(1, channels)
+        val bytesPerFrame = effectiveChannels * 2
+        val inFrames = pcmBytes.size / bytesPerFrame
+        if (inFrames <= 0 || inSampleRate == outSampleRate || inSampleRate <= 0 || outSampleRate <= 0) {
+            return pcmBytes
+        }
+
+        val outFrames = ((inFrames.toLong() * outSampleRate) / inSampleRate).toInt()
+        val outBytes = ByteArray(outFrames * bytesPerFrame)
+        val ratio = inSampleRate.toDouble() / outSampleRate.toDouble()
+
+        val inBuffer = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
+        val outBuffer = ByteBuffer.wrap(outBytes).order(ByteOrder.LITTLE_ENDIAN)
+
+        for (outI in 0 until outFrames) {
+            val inPos = outI * ratio
+            val inIdx = inPos.toInt()
+            val frac = inPos - inIdx
+            val nextIdx = minOf(inIdx + 1, inFrames - 1)
+
+            for (ch in 0 until effectiveChannels) {
+                val s1 = inBuffer.getShort((inIdx * effectiveChannels + ch) * 2).toInt()
+                val s2 = inBuffer.getShort((nextIdx * effectiveChannels + ch) * 2).toInt()
+                val interpolated = (s1 + frac * (s2 - s1)).toInt().coerceIn(-32768, 32767)
+                outBuffer.putShort((outI * effectiveChannels + ch) * 2, interpolated.toShort())
+            }
+        }
+        return outBytes
+    }
+
+    /**
      * Encodes 16-bit PCM bytes via Android MediaCodec with MIME audio/opus.
      * Falls back to PCM if MediaCodec encoder is not available on older test runners or unsupported environments.
      */
@@ -197,10 +236,18 @@ object OpusCodecBridge {
                 pcmBytes
             }
 
+            // Opus natively operates on 48,000 Hz. Resample to prevent pitch shift / speed-up
+            val targetRate = 48000
+            val preparedPcm = if (sampleRate != targetRate && sampleRate > 0) {
+                resamplePcm16(rawPcm, sampleRate, targetRate, channels)
+            } else {
+                rawPcm
+            }
+
             val tempOutputFile = File.createTempFile("stego_opus_out_", ".opus", context.cacheDir)
             try {
                 val muxer = MediaMuxer(tempOutputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_OGG)
-                val format = MediaFormat.createAudioFormat(OPUS_MIME, sampleRate, channels).apply {
+                val format = MediaFormat.createAudioFormat(OPUS_MIME, targetRate, channels).apply {
                     setInteger(MediaFormat.KEY_BIT_RATE, bitrateBps)
                     try {
                         setInteger(
@@ -226,7 +273,7 @@ object OpusCodecBridge {
                         )
                         encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                     } catch (_: Throwable) {
-                        val fallbackFormat = MediaFormat.createAudioFormat(OPUS_MIME, sampleRate, channels).apply {
+                        val fallbackFormat = MediaFormat.createAudioFormat(OPUS_MIME, targetRate, channels).apply {
                             setInteger(MediaFormat.KEY_BIT_RATE, bitrateBps)
                             setInteger(MediaFormat.KEY_COMPLEXITY, if (profile == OpusProfile.VOICE) 5 else 10)
                         }
@@ -240,7 +287,7 @@ object OpusCodecBridge {
                 val bufferInfo = MediaCodec.BufferInfo()
 
                 var currentPcmOffset = 0
-                val pcmEnd = rawPcm.size
+                val pcmEnd = preparedPcm.size
                 var isInputEOS = false
                 var isOutputEOS = false
                 val bytesPerFrame = maxOf(1, channels) * 2
@@ -265,11 +312,11 @@ object OpusCodecBridge {
                                     isInputEOS = true
                                 } else {
                                     val toWrite = minOf(remaining, inBuffer.capacity())
-                                    inBuffer.put(rawPcm, currentPcmOffset, toWrite)
+                                    inBuffer.put(preparedPcm, currentPcmOffset, toWrite)
                                     encoder.queueInputBuffer(inIndex, 0, toWrite, ptsUs, 0)
                                     currentPcmOffset += toWrite
                                     val framesSent = toWrite / bytesPerFrame
-                                    ptsUs += (framesSent * 1_000_000L) / sampleRate
+                                    ptsUs += (framesSent * 1_000_000L) / targetRate
                                 }
                             }
                         }
