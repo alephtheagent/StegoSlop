@@ -91,5 +91,19 @@ Strategic engineering plan for StegoSlop steganography expansion.
   - Dice icon button to randomize timestamps and sequential counter IDs (`0001..9999`).
 - **File System Last-Modified Timestamp Spoofing (mtime):**
   - Synchronizes the saved file's OS last-modified timestamp with the fake date generated in the filename, placing it seamlessly into historical positions in the user's gallery / downloads list.
+- **In-Place Overwrite & Original Name Preservation:**
+  - Option to directly overwrite the original carrier file in-place, keeping its exact original filename, filesystem path, and timestamp (zero new files created, zero digital footprint in the file manager).
 - **Custom Editable Text Field:**
   - Free-form manual editing with live extension guard.
+
+---
+
+## 9. Lossy-Resilient & Transform-Domain Steganography (`Robust-Stego`)
+- **JPEG DCT Coefficient Modulation (F5 / OutGuess / JSteg approach):**
+  - Embeds payload bits into quantized Discrete Cosine Transform (DCT) coefficients rather than spatial pixels.
+  - Survives standard JPEG re-compression and format re-saving without bit rot.
+- **DWT (Discrete Wavelet Transform) + DSSS (Direct Sequence Spread Spectrum):**
+  - Distributes encrypted payload bits across mid-frequency 2D wavelet sub-bands combined with robust error-correction codes (BCH / Reed-Solomon).
+  - Survives destructive social media compression (WhatsApp image compression, Telegram compressed photo sending, mild downscaling, and noise).
+- **Audio QIM (Quantization Index Modulation):**
+  - Frequency-domain watermarking that survives lossy psychoacoustic audio encoders (MP3, AAC, OGG Opus).
