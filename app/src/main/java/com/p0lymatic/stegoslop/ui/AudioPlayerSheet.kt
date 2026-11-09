@@ -4,9 +4,12 @@ import android.content.Context
 import android.media.MediaPlayer
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -272,6 +275,25 @@ fun AudioPlayerSheet(
 
             Spacer(modifier = Modifier.height(28.dp))
 
+            // Dynamic morphing shape and width for Play/Pause button (Pixel Player OSS / Material 3 style)
+            val playPauseCornerRadius by animateDpAsState(
+                targetValue = if (isPlaying) 16.dp else 33.dp,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                ),
+                label = "playPauseCornerRadius"
+            )
+
+            val playPauseWidth by animateDpAsState(
+                targetValue = if (isPlaying) 80.dp else 96.dp,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                ),
+                label = "playPauseWidth"
+            )
+
             // Big Center MD3 Controls (Pixel Player OSS squircle trio)
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -301,7 +323,7 @@ fun AudioPlayerSheet(
                     }
                 }
 
-                // Big Center MD3 Play/Pause Squircle Capsule
+                // Big Center MD3 Play/Pause Squircle Capsule (Morphs to squarish squircle when playing)
                 Surface(
                     onClick = {
                         mediaPlayer?.let { mp ->
@@ -314,9 +336,9 @@ fun AudioPlayerSheet(
                             }
                         }
                     },
-                    shape = RoundedCornerShape(28.dp),
+                    shape = RoundedCornerShape(playPauseCornerRadius),
                     color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.size(width = 96.dp, height = 66.dp)
+                    modifier = Modifier.size(width = playPauseWidth, height = 66.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
