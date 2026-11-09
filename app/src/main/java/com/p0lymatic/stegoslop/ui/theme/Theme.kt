@@ -44,7 +44,7 @@ val StegoShapes = Shapes(
 
 @Composable
 fun StegoSlopTheme(
-    dynamicColor: Boolean = false,
+    dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
