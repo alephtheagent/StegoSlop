@@ -10,3 +10,6 @@
 local.properties
 app/build/
 release-artifacts/
+TASK*.md
+ROADMAP.md
+run_*.sh
