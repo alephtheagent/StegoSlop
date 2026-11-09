@@ -1,0 +1,59 @@
+name: Build StegoSlop APK
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & Test APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradlew Executable
+        run: chmod +x gradlew
+
+      - name: Extract App Version
+        id: get_version
+        run: |
+          VERSION=$(grep 'versionName = ' app/build.gradle.kts | cut -d '"' -f 2)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Run Unit Tests
+        run: ./gradlew test --stacktrace
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Prepare APK Asset
+        run: |
+          mkdir -p release-artifacts
+          cp app/build/outputs/apk/debug/*.apk release-artifacts/StegoSlop-v${{ env.VERSION }}.apk
+          cp release-artifacts/StegoSlop-v${{ env.VERSION }}.apk release-artifacts/StegoSlop.apk
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: StegoSlop-v${{ env.VERSION }}.apk
+          path: release-artifacts/StegoSlop-v${{ env.VERSION }}.apk
+          if-no-files-found: error
