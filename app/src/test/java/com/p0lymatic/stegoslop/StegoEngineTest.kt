@@ -1,0 +1,222 @@
+package com.p0lymatic.stegoslop
+
+import com.p0lymatic.stegoslop.core.AudioLsbEngine
+import com.p0lymatic.stegoslop.core.CryptoUtils
+import com.p0lymatic.stegoslop.core.ImageLsbEngine
+import com.p0lymatic.stegoslop.core.PayloadType
+import com.p0lymatic.stegoslop.core.StegoProtocol
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.util.Random
+
+class StegoEngineTest {
+
+    @Test
+    fun testProtocolPackingAndUnpackingText() {
+        val originalText = "StegoSlop: Lossless LSB steganography protocol verification"
+        val textBytes = originalText.toByteArray(Charsets.UTF_8)
+
+        for (bpu in listOf(1, 2, 4)) {
+            val packed = StegoProtocol.packPayload(
+                type = PayloadType.TEXT,
+                data = textBytes,
+                password = null,
+                bitsPerUnit = bpu
+            )
+
+            assertNotNull(packed)
+            assertTrue(packed.size >= StegoProtocol.HEADER_MIN_LENGTH + textBytes.size)
+
+            val unpacked = StegoProtocol.unpackPayload(packed)
+            assertEquals(PayloadType.TEXT, unpacked.type)
+            assertFalse(unpacked.isEncrypted)
+            assertEquals(bpu, unpacked.bitsPerUnit)
+            assertArrayEquals(textBytes, unpacked.data)
+            assertEquals(originalText, String(unpacked.data, Charsets.UTF_8))
+        }
+    }
+
+    @Test
+    fun testProtocolEncryptionDecryption() {
+        val secretMessage = "Confidential payload secured with AES-256-GCM"
+        val messageBytes = secretMessage.toByteArray(Charsets.UTF_8)
+        val password = "StrongPassword@2026!"
+
+        val packed = StegoProtocol.packPayload(
+            type = PayloadType.TEXT,
+            data = messageBytes,
+            password = password,
+            bitsPerUnit = 1
+        )
+
+        // Attempting to unpack without password must throw
+        val noPassEx = assertThrows(IllegalArgumentException::class.java) {
+            StegoProtocol.unpackPayload(packed, password = null)
+        }
+        assertTrue(noPassEx.message?.contains("Password required", ignoreCase = true) == true)
+
+        // Attempting to unpack with incorrect password must throw
+        val wrongPassEx = assertThrows(IllegalArgumentException::class.java) {
+            StegoProtocol.unpackPayload(packed, password = "WrongPassword")
+        }
+        assertTrue(wrongPassEx.message?.contains("failed", ignoreCase = true) == true)
+
+        // Unpacking with correct password succeeds
+        val unpacked = StegoProtocol.unpackPayload(packed, password = password)
+        assertEquals(PayloadType.TEXT, unpacked.type)
+        assertTrue(unpacked.isEncrypted)
+        assertEquals(1, unpacked.bitsPerUnit)
+        assertArrayEquals(messageBytes, unpacked.data)
+        assertEquals(secretMessage, String(unpacked.data, Charsets.UTF_8))
+
+        // Also test binary file encryption/decryption
+        val binaryData = ByteArray(512).also { Random(42).nextBytes(it) }
+        val packedBinary = StegoProtocol.packPayload(
+            type = PayloadType.FILE,
+            data = binaryData,
+            password = password,
+            bitsPerUnit = 2
+        )
+        val unpackedBinary = StegoProtocol.unpackPayload(packedBinary, password = password)
+        assertEquals(PayloadType.FILE, unpackedBinary.type)
+        assertTrue(unpackedBinary.isEncrypted)
+        assertEquals(2, unpackedBinary.bitsPerUnit)
+        assertArrayEquals(binaryData, unpackedBinary.data)
+    }
+
+    @Test
+    fun testAudioLsbEmbedAndExtract() {
+        val sampleCount = 16000 // 16,000 samples @ 16-bit = 32,000 bytes data chunk
+        val wavBytes = AudioLsbEngine.createSyntheticWav(sampleCount = sampleCount)
+
+        val capacity1 = AudioLsbEngine.computeCapacity(wavBytes, bitsPerSample = 1)
+        assertEquals(2000, capacity1) // (32000 / 2 * 1) / 8 = 2000 bytes
+
+        val secretText = "Audio steganography watermark embedded in 16-bit PCM RIFF samples"
+        val textBytes = secretText.toByteArray(Charsets.UTF_8)
+
+        for (bpu in listOf(1, 2, 4)) {
+            val container = StegoProtocol.packPayload(
+                type = PayloadType.TEXT,
+                data = textBytes,
+                password = "audioSecretPassword",
+                bitsPerUnit = bpu
+            )
+
+            // Embed into synthetic WAV
+            val embeddedWav = AudioLsbEngine.embed(wavBytes, container, bitsPerSample = bpu)
+            assertEquals(wavBytes.size, embeddedWav.size)
+
+            // Extract container
+            val extractedContainer = AudioLsbEngine.extract(embeddedWav, bitsPerSample = bpu)
+            assertArrayEquals(container, extractedContainer)
+
+            // Unpack payload
+            val unpacked = StegoProtocol.unpackPayload(extractedContainer, password = "audioSecretPassword")
+            assertEquals(PayloadType.TEXT, unpacked.type)
+            assertTrue(unpacked.isEncrypted)
+            assertEquals(bpu, unpacked.bitsPerUnit)
+            assertEquals(secretText, String(unpacked.data, Charsets.UTF_8))
+        }
+
+        // Exceeding capacity throws IllegalArgumentException
+        val oversizedData = ByteArray(capacity1 + 10)
+        val oversizedContainer = StegoProtocol.packPayload(PayloadType.FILE, oversizedData, bitsPerUnit = 1)
+        assertThrows(IllegalArgumentException::class.java) {
+            AudioLsbEngine.embed(wavBytes, oversizedContainer, bitsPerSample = 1)
+        }
+    }
+
+    @Test
+    fun testImageLsbLogic() {
+        val pixelCount = 2000
+        val random = Random(12345)
+        val pixels = IntArray(pixelCount) {
+            val r = random.nextInt(256)
+            val g = random.nextInt(256)
+            val b = random.nextInt(256)
+            (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+        }
+
+        val secretMessage = "Image LSB embedded across RGB channels with alpha preserved"
+        val messageBytes = secretMessage.toByteArray(Charsets.UTF_8)
+
+        for (bpu in listOf(1, 2, 4)) {
+            val container = StegoProtocol.packPayload(
+                type = PayloadType.TEXT,
+                data = messageBytes,
+                password = null,
+                bitsPerUnit = bpu
+            )
+
+            val modifiedPixels = ImageLsbEngine.embedInPixels(pixels, container, bitsPerChannel = bpu)
+            assertEquals(pixels.size, modifiedPixels.size)
+
+            // Verify Alpha is intact 0xFF on all pixels
+            for (p in modifiedPixels) {
+                val alpha = (p ushr 24) and 0xFF
+                assertEquals(0xFF, alpha)
+            }
+
+            // Extract and verify
+            val extractedContainer = ImageLsbEngine.extractFromPixels(modifiedPixels, bitsPerChannel = bpu)
+            assertArrayEquals(container, extractedContainer)
+
+            val unpacked = StegoProtocol.unpackPayload(extractedContainer)
+            assertEquals(PayloadType.TEXT, unpacked.type)
+            assertEquals(bpu, unpacked.bitsPerUnit)
+            assertEquals(secretMessage, String(unpacked.data, Charsets.UTF_8))
+        }
+
+        // Test bit plane extraction logic
+        val planePixels = ImageLsbEngine.generateBitPlanePixels(pixels, bitIndex = 0)
+        assertEquals(pixels.size, planePixels.size)
+        for (p in planePixels) {
+            val r = (p ushr 16) and 0xFF
+            val g = (p ushr 8) and 0xFF
+            val b = p and 0xFF
+            val a = (p ushr 24) and 0xFF
+            assertEquals(0xFF, a)
+            assertTrue(r == 0 || r == 255)
+            assertEquals(r, g)
+            assertEquals(g, b)
+        }
+    }
+
+    @Test
+    fun testCorruptedDataThrows() {
+        val payloadData = "Important integrity payload for CRC32 testing".toByteArray(Charsets.UTF_8)
+        val packed = StegoProtocol.packPayload(
+            type = PayloadType.TEXT,
+            data = payloadData,
+            password = null,
+            bitsPerUnit = 1
+        )
+
+        // Corrupt one byte of the payload data
+        val corrupted = packed.copyOf()
+        val corruptIndex = corrupted.size - 1
+        corrupted[corruptIndex] = (corrupted[corruptIndex].toInt() xor 0x01).toByte()
+
+        val ex = assertThrows(IllegalArgumentException::class.java) {
+            StegoProtocol.unpackPayload(corrupted)
+        }
+        assertTrue(
+            "Expected CRC32 error message but got: ${ex.message}",
+            ex.message?.contains("CRC32", ignoreCase = true) == true
+        )
+
+        // Corrupt magic bytes
+        val badMagic = packed.copyOf()
+        badMagic[0] = 'X'.code.toByte()
+        val magicEx = assertThrows(IllegalArgumentException::class.java) {
+            StegoProtocol.unpackPayload(badMagic)
+        }
+        assertTrue(magicEx.message?.contains("magic", ignoreCase = true) == true)
+    }
+}

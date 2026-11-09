@@ -1,0 +1,1 @@
+# StegoSlop proguard rules
