@@ -112,6 +112,7 @@ import androidx.compose.ui.unit.sp
 import com.p0lymatic.stegoslop.core.AudioCodecBridge
 import com.p0lymatic.stegoslop.core.AudioLsbEngine
 import com.p0lymatic.stegoslop.core.ImageLsbEngine
+import com.p0lymatic.stegoslop.core.ZeroWidthStego
 import com.p0lymatic.stegoslop.core.PayloadType
 import com.p0lymatic.stegoslop.core.StegoProtocol
 import com.p0lymatic.stegoslop.core.UnpackedPayload
@@ -127,9 +128,9 @@ enum class AppMode {
 
 enum class CarrierType {
     IMAGE,
-    AUDIO
+    AUDIO,
+    TEXT
 }
-
 enum class PayloadTab {
     TEXT,
     FILE
@@ -183,6 +184,9 @@ private fun MainScreenContent(
     var carrierWavBytes by remember { mutableStateOf<ByteArray?>(null) }
     var carrierFileName by remember { mutableStateOf<String?>(null) }
     var carrierFormatBadge by remember { mutableStateOf<String?>(null) }
+    var coverText by remember { mutableStateOf("Привет, как дела?") }
+    var injectedText by remember { mutableStateOf<String?>(null) }
+    var extractInputText by remember { mutableStateOf("") }
     var bitsPerUnit by remember { mutableIntStateOf(1) }
 
     // Payload state (Inject)
@@ -457,6 +461,7 @@ private fun MainScreenContent(
                     0
                 }
             } ?: 0
+            CarrierType.TEXT -> Int.MAX_VALUE
         }
     }
 
@@ -481,9 +486,11 @@ private fun MainScreenContent(
 
     val hasCarrier = when (activeMode) {
         AppMode.INJECT -> (carrierType == CarrierType.IMAGE && carrierBitmap != null) ||
-                (carrierType == CarrierType.AUDIO && carrierWavBytes != null)
+                (carrierType == CarrierType.AUDIO && carrierWavBytes != null) ||
+                (carrierType == CarrierType.TEXT && coverText.isNotBlank())
         AppMode.EXTRACT -> (extractCarrierType == CarrierType.IMAGE && extractCarrierBitmap != null) ||
-                (extractCarrierType == CarrierType.AUDIO && extractCarrierWavBytes != null)
+                (extractCarrierType == CarrierType.AUDIO && extractCarrierWavBytes != null) ||
+                (extractCarrierType == CarrierType.TEXT && extractInputText.isNotBlank())
     }
 
     Scaffold(
@@ -502,12 +509,18 @@ private fun MainScreenContent(
                     if (hasCarrier) {
                         val formatBadge = when (activeMode) {
                             AppMode.INJECT -> {
-                                if (carrierType == CarrierType.IMAGE) carrierFormatBadge ?: "PNG"
-                                else carrierFormatBadge ?: "WAV"
+                                when (carrierType) {
+                                    CarrierType.IMAGE -> carrierFormatBadge ?: "PNG"
+                                    CarrierType.AUDIO -> carrierFormatBadge ?: "WAV"
+                                    CarrierType.TEXT -> "TEXT"
+                                }
                             }
                             AppMode.EXTRACT -> {
-                                if (extractCarrierType == CarrierType.IMAGE) extractCarrierFormatBadge ?: "PNG"
-                                else extractCarrierFormatBadge ?: "WAV"
+                                when (extractCarrierType) {
+                                    CarrierType.IMAGE -> extractCarrierFormatBadge ?: "PNG"
+                                    CarrierType.AUDIO -> extractCarrierFormatBadge ?: "WAV"
+                                    CarrierType.TEXT -> "TEXT"
+                                }
                             }
                         }
                         Surface(
@@ -689,10 +702,26 @@ private fun MainScreenContent(
                                                 selected = carrierType == CarrierType.AUDIO,
                                                 onSelect = { carrierType = CarrierType.AUDIO }
                                             )
+                                            CarrierTypeChip(
+                                                title = "Text",
+                                                selected = carrierType == CarrierType.TEXT,
+                                                onSelect = { carrierType = CarrierType.TEXT }
+                                            )
                                         }
                                     }
 
-                                    Row(
+                                    if (carrierType == CarrierType.TEXT) {
+                                        OutlinedTextField(
+                                            value = coverText,
+                                            onValueChange = { coverText = it },
+                                            label = { Text("Cover Text") },
+                                            placeholder = { Text("Привет, как дела?") },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            minLines = 3,
+                                            shape = RoundedCornerShape(16.dp)
+                                        )
+                                    } else {
+                                        Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                                     ) {
@@ -824,6 +853,7 @@ private fun MainScreenContent(
                                         }
                                     }
                                 }
+                                }
                             }
 
                             // Payload Card
@@ -925,7 +955,8 @@ private fun MainScreenContent(
                                 }
                             }
 
-                            // Capacity Usage Card
+                            if (carrierType != CarrierType.TEXT) {
+                                // Capacity Usage Card
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(24.dp),
@@ -994,6 +1025,7 @@ private fun MainScreenContent(
                                     }
                                 }
                             }
+                        }
 
                             // Security Card
                             Card(
@@ -1096,6 +1128,38 @@ private fun MainScreenContent(
                                         isError = true
                                         return@Button
                                     }
+                                    if (carrierType == CarrierType.TEXT) {
+                                        if (coverText.isBlank()) {
+                                            statusMessage = "Please enter cover text"
+                                            isError = true
+                                            return@Button
+                                        }
+                                        isProcessing = true
+                                        statusMessage = null
+                                        isError = false
+                                        coroutineScope.launch {
+                                            try {
+                                                val output = withContext(Dispatchers.Default) {
+                                                    ZeroWidthStego.encode(
+                                                        coverText = coverText,
+                                                        secretData = rawPayloadBytes,
+                                                        password = if (encryptEnabled) password else null
+                                                    )
+                                                }
+                                                injectedText = output
+                                                injectedBitmap = null
+                                                injectedWavBytes = null
+                                                statusMessage = "Secret hidden in text successfully"
+                                                isError = false
+                                            } catch (e: Exception) {
+                                                statusMessage = "Injection error: ${e.message}"
+                                                isError = true
+                                            } finally {
+                                                isProcessing = false
+                                            }
+                                        }
+                                        return@Button
+                                    }
                                     if (carrierType == CarrierType.IMAGE && carrierBitmap == null) {
                                         statusMessage = "Please select or generate an image carrier"
                                         isError = true
@@ -1172,6 +1236,67 @@ private fun MainScreenContent(
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold
                                     )
+                                }
+                            }
+
+                            // Injected Text Output Card
+                            if (carrierType == CarrierType.TEXT && injectedText != null) {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(24.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                    )
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(20.dp),
+                                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                            Text(
+                                                text = "Injected Output",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+
+                                        OutlinedTextField(
+                                            value = injectedText!!,
+                                            onValueChange = {},
+                                            readOnly = true,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            minLines = 3,
+                                            shape = RoundedCornerShape(16.dp)
+                                        )
+
+                                        Button(
+                                            onClick = {
+                                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                                val clip = ClipData.newPlainText("Covert Message", injectedText)
+                                                clipboard.setPrimaryClip(clip)
+                                                statusMessage = "Copied to clipboard"
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            shape = RoundedCornerShape(28.dp),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = MaterialTheme.colorScheme.primary,
+                                                contentColor = MaterialTheme.colorScheme.onPrimary
+                                            )
+                                        ) {
+                                            Icon(Icons.Default.ContentCopy, contentDescription = null)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("Copy to Clipboard")
+                                        }
+                                    }
                                 }
                             }
 
@@ -1399,12 +1524,80 @@ private fun MainScreenContent(
                                     modifier = Modifier.padding(20.dp),
                                     verticalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
-                                    Text(
-                                        text = "Carrier",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Carrier",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            CarrierTypeChip(
+                                                title = "Image",
+                                                selected = extractCarrierType == CarrierType.IMAGE,
+                                                onSelect = { extractCarrierType = CarrierType.IMAGE }
+                                            )
+                                            CarrierTypeChip(
+                                                title = "Audio",
+                                                selected = extractCarrierType == CarrierType.AUDIO,
+                                                onSelect = { extractCarrierType = CarrierType.AUDIO }
+                                            )
+                                            CarrierTypeChip(
+                                                title = "Text",
+                                                selected = extractCarrierType == CarrierType.TEXT,
+                                                onSelect = { extractCarrierType = CarrierType.TEXT }
+                                            )
+                                        }
+                                    }
+
+                                    if (extractCarrierType == CarrierType.TEXT) {
+                                        OutlinedTextField(
+                                            value = extractInputText,
+                                            onValueChange = { extractInputText = it },
+                                            label = { Text("Paste Text with Hidden Secret") },
+                                            placeholder = { Text("Paste message here...") },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            minLines = 4,
+                                            shape = RoundedCornerShape(16.dp)
+                                        )
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            OutlinedButton(
+                                                onClick = {
+                                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                                    val clipData = clipboard.primaryClip
+                                                    if (clipData != null && clipData.itemCount > 0) {
+                                                        extractInputText = clipData.getItemAt(0).text?.toString() ?: ""
+                                                    }
+                                                },
+                                                modifier = Modifier.weight(1f),
+                                                shape = RoundedCornerShape(28.dp)
+                                            ) {
+                                                Icon(Icons.Default.ContentCopy, contentDescription = null)
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text("Paste")
+                                            }
+
+                                            if (injectedText != null) {
+                                                OutlinedButton(
+                                                    onClick = {
+                                                        extractInputText = injectedText!!
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(28.dp)
+                                                ) {
+                                                    Text("Use Injected")
+                                                }
+                                            }
+                                        }
+                                    } else {
 
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
@@ -1511,6 +1704,7 @@ private fun MainScreenContent(
                                         }
                                     }
                                 }
+                                }
                             }
 
                             // Password Card
@@ -1575,6 +1769,43 @@ private fun MainScreenContent(
                             // 56.dp Extract Action Pill
                             Button(
                                 onClick = {
+                                    if (extractCarrierType == CarrierType.TEXT) {
+                                        if (extractInputText.isBlank()) {
+                                            extractStatusMessage = "Please paste text containing hidden data"
+                                            extractIsError = true
+                                            return@Button
+                                        }
+
+                                        isProcessing = true
+                                        extractStatusMessage = null
+                                        extractIsError = false
+                                        extractedPayload = null
+
+                                        coroutineScope.launch {
+                                            try {
+                                                val secretBytes = withContext(Dispatchers.Default) {
+                                                    ZeroWidthStego.decode(
+                                                        text = extractInputText,
+                                                        password = extractPassword.ifEmpty { null }
+                                                    )
+                                                }
+                                                extractedPayload = UnpackedPayload(
+                                                    type = PayloadType.TEXT,
+                                                    data = secretBytes,
+                                                    isEncrypted = extractPassword.isNotEmpty()
+                                                )
+                                                extractStatusMessage = "Secret extracted from text successfully"
+                                                extractIsError = false
+                                            } catch (e: Exception) {
+                                                extractStatusMessage = "Extraction error: ${e.message}"
+                                                extractIsError = true
+                                            } finally {
+                                                isProcessing = false
+                                            }
+                                        }
+                                        return@Button
+                                    }
+
                                     if (extractCarrierType == CarrierType.IMAGE && extractCarrierBitmap == null) {
                                         extractStatusMessage = "Please select an image carrier"
                                         extractIsError = true
@@ -1623,7 +1854,7 @@ private fun MainScreenContent(
                                     .fillMaxWidth()
                                     .height(56.dp),
                                 shape = RoundedCornerShape(28.dp),
-                                enabled = !isProcessing && (extractCarrierBitmap != null || extractCarrierWavBytes != null),
+                                enabled = !isProcessing && (extractCarrierBitmap != null || extractCarrierWavBytes != null || (extractCarrierType == CarrierType.TEXT && extractInputText.isNotBlank())),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = MaterialTheme.colorScheme.primary,
                                     contentColor = MaterialTheme.colorScheme.onPrimary
