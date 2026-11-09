@@ -11,6 +11,8 @@ import com.p0lymatic.stegoslop.core.CamouflageUtils
 import com.p0lymatic.stegoslop.core.ZeroWidthStego
 import com.p0lymatic.stegoslop.core.generateDecoyName
 import com.p0lymatic.stegoslop.core.randomizeDecoyName
+import com.p0lymatic.stegoslop.core.OpusCodecBridge
+import com.p0lymatic.stegoslop.core.OpusProfile
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -429,5 +431,145 @@ class StegoEngineTest {
             val objAudDecoy = CamouflageUtils.randomizeDecoyName(isAudio = true, extension = "flac")
             assertTrue("Decoy flac name should end with .flac", objAudDecoy.endsWith(".flac"))
         }
+    }
+
+    @Test
+    fun testCalculateTargetBitrateVoiceProfile() {
+        // Small capacity: raw = 1000 * 8 / 10.0 = 800 bps -> clamps to 8_000
+        val lowBitrate = OpusCodecBridge.calculateTargetBitrate(
+            durationSeconds = 10.0,
+            availableCapacityBytes = 1_000,
+            profile = OpusProfile.VOICE
+        )
+        assertEquals(8_000, lowBitrate)
+
+        // Medium capacity: raw = 10_000 * 8 / 5.0 = 16_000 bps -> 16_000
+        val midBitrate = OpusCodecBridge.calculateTargetBitrate(
+            durationSeconds = 5.0,
+            availableCapacityBytes = 10_000,
+            profile = OpusProfile.VOICE
+        )
+        assertEquals(16_000, midBitrate)
+
+        // High capacity: raw = 100_000 * 8 / 5.0 = 160_000 bps -> clamps to 24_000
+        val highBitrate = OpusCodecBridge.calculateTargetBitrate(
+            durationSeconds = 5.0,
+            availableCapacityBytes = 100_000,
+            profile = OpusProfile.VOICE
+        )
+        assertEquals(24_000, highBitrate)
+
+        // Zero / negative duration: default safe clamp
+        val zeroDurBitrate = OpusCodecBridge.calculateTargetBitrate(
+            durationSeconds = 0.0,
+            availableCapacityBytes = 50_000,
+            profile = OpusProfile.VOICE
+        )
+        assertEquals(8_000, zeroDurBitrate)
+    }
+
+    @Test
+    fun testCalculateTargetBitrateMusicProfile() {
+        // Small capacity: raw = 1000 * 8 / 10.0 = 800 bps -> clamps to 24_000
+        val lowBitrate = OpusCodecBridge.calculateTargetBitrate(
+            durationSeconds = 10.0,
+            availableCapacityBytes = 1_000,
+            profile = OpusProfile.MUSIC
+        )
+        assertEquals(24_000, lowBitrate)
+
+        // Medium capacity: raw = 30_000 * 8 / 5.0 = 48_000 bps -> 48_000
+        val midBitrate = OpusCodecBridge.calculateTargetBitrate(
+            durationSeconds = 5.0,
+            availableCapacityBytes = 30_000,
+            profile = OpusProfile.MUSIC
+        )
+        assertEquals(48_000, midBitrate)
+
+        // High capacity: raw = 200_000 * 8 / 5.0 = 320_000 bps -> clamps to 96_000
+        val highBitrate = OpusCodecBridge.calculateTargetBitrate(
+            durationSeconds = 5.0,
+            availableCapacityBytes = 200_000,
+            profile = OpusProfile.MUSIC
+        )
+        assertEquals(96_000, highBitrate)
+
+        // Zero duration: default safe clamp
+        val zeroDurBitrate = OpusCodecBridge.calculateTargetBitrate(
+            durationSeconds = 0.0,
+            availableCapacityBytes = 50_000,
+            profile = OpusProfile.MUSIC
+        )
+        assertEquals(24_000, zeroDurBitrate)
+    }
+
+    @Test
+    fun testTrimPcmMonoAccuracy() {
+        val sampleRate = 1000
+        val channels = 1
+        val totalSeconds = 10.0
+        val totalSamples = (sampleRate * totalSeconds).toInt()
+        // 16-bit mono = 2 bytes per sample
+        val pcm = ByteArray(totalSamples * 2)
+        for (i in 0 until totalSamples) {
+            val sampleValue = (i % 256).toByte()
+            pcm[i * 2] = sampleValue
+            pcm[i * 2 + 1] = (sampleValue + 1).toByte()
+        }
+
+        // Trim 2.0 to 4.5 seconds (2.5 seconds = 2500 samples = 5000 bytes)
+        val trimmed = OpusCodecBridge.trimPcm(
+            pcmBytes = pcm,
+            sampleRate = sampleRate,
+            channels = channels,
+            startSeconds = 2.0,
+            endSeconds = 4.5
+        )
+
+        val expectedStartByte = (2.0 * sampleRate * 2).toInt() // 4000
+        val expectedEndByte = (4.5 * sampleRate * 2).toInt()   // 9000
+        val expectedLength = expectedEndByte - expectedStartByte // 5000
+
+        assertEquals(expectedLength, trimmed.size)
+        for (i in 0 until expectedLength) {
+            assertEquals(pcm[expectedStartByte + i], trimmed[i])
+        }
+    }
+
+    @Test
+    fun testTrimPcmStereoAccuracyAndBoundaries() {
+        val sampleRate = 48000
+        val channels = 2
+        val totalFrames = 48000 * 3 // 3 seconds
+        val bytesPerFrame = channels * 2 // 4 bytes
+        val pcm = ByteArray(totalFrames * bytesPerFrame)
+        for (i in pcm.indices) {
+            pcm[i] = (i and 0xFF).toByte()
+        }
+
+        // 1. Full range (0.0 to 3.0)
+        val fullTrimmed = OpusCodecBridge.trimPcm(pcm, sampleRate, channels, 0.0, 3.0)
+        assertArrayEquals(pcm, fullTrimmed)
+
+        // 2. Sub-slice (1.0 to 2.0 = 1 sec = 48000 frames = 192000 bytes)
+        val oneSec = OpusCodecBridge.trimPcm(pcm, sampleRate, channels, 1.0, 2.0)
+        assertEquals(48000 * 4, oneSec.size)
+        assertEquals(0, oneSec.size % bytesPerFrame)
+        val expectedStart = 48000 * 4
+        for (i in 0 until 100) {
+            assertEquals(pcm[expectedStart + i], oneSec[i])
+        }
+
+        // 3. Inverted range (2.0 to 1.0) -> empty array
+        val emptyInverted = OpusCodecBridge.trimPcm(pcm, sampleRate, channels, 2.0, 1.0)
+        assertEquals(0, emptyInverted.size)
+
+        // 4. Equal range (1.5 to 1.5) -> empty array
+        val emptyEqual = OpusCodecBridge.trimPcm(pcm, sampleRate, channels, 1.5, 1.5)
+        assertEquals(0, emptyEqual.size)
+
+        // 5. Out of bounds start & end clamp
+        val outOfBounds = OpusCodecBridge.trimPcm(pcm, sampleRate, channels, -2.0, 10.0)
+        assertArrayEquals(pcm, outOfBounds)
     }
 }

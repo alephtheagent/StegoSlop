@@ -9,6 +9,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.media.MediaPlayer
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
@@ -75,6 +76,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -87,6 +89,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -115,11 +118,15 @@ import com.p0lymatic.stegoslop.core.ImageLsbEngine
 import com.p0lymatic.stegoslop.core.ZeroWidthStego
 import com.p0lymatic.stegoslop.core.PayloadType
 import com.p0lymatic.stegoslop.core.StegoProtocol
+import com.p0lymatic.stegoslop.core.OpusCodecBridge
+import com.p0lymatic.stegoslop.core.OpusProfile
 import com.p0lymatic.stegoslop.core.UnpackedPayload
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import java.io.File
+import java.io.FileOutputStream
 
 enum class AppMode {
     INJECT,
@@ -133,6 +140,7 @@ enum class CarrierType {
 }
 enum class PayloadTab {
     TEXT,
+    AUDIO,
     FILE
 }
 
@@ -233,6 +241,19 @@ private fun MainScreenContent(
     // Audio Playback state
     var isPlayingAudio by remember { mutableStateOf(false) }
     var currentAudioTrack by remember { mutableStateOf<AudioTrack?>(null) }
+    var currentMediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+
+    // Audio Payload state (Inject)
+    var payloadAudioFileName by remember { mutableStateOf<String?>(null) }
+    var payloadAudioRawPcmWav by remember { mutableStateOf<ByteArray?>(null) }
+    var payloadAudioDurationSeconds by remember { mutableDoubleStateOf(0.0) }
+    var payloadAudioSampleRate by remember { mutableIntStateOf(44100) }
+    var payloadAudioChannels by remember { mutableIntStateOf(2) }
+    var opusProfile by remember { mutableStateOf(OpusProfile.VOICE) }
+    var trimStartSeconds by remember { mutableDoubleStateOf(0.0) }
+    var trimEndSeconds by remember { mutableDoubleStateOf(0.0) }
+    var isPreviewPlaying by remember { mutableStateOf(false) }
+    var previewAudioTrack by remember { mutableStateOf<AudioTrack?>(null) }
 
     // File pickers
     val injectCarrierPicker = rememberLauncherForActivityResult(
@@ -302,6 +323,39 @@ private fun MainScreenContent(
                     }
                 } catch (e: Exception) {
                     statusMessage = "Failed to load payload file: ${e.message}"
+                    isError = true
+                }
+            }
+        }
+    }
+
+    val payloadAudioPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let {
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    if (bytes != null) {
+                        val resolvedName = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                            if (nameIndex != -1 && cursor.moveToFirst()) {
+                                cursor.getString(nameIndex)
+                            } else null
+                        } ?: uri.lastPathSegment ?: "audio_payload.wav"
+
+                        val pcmWav = OpusCodecBridge.decodeOpusToPcmWav(context, bytes)
+                        val info = AudioLsbEngine.parseWav(pcmWav)
+                        payloadAudioRawPcmWav = pcmWav
+                        payloadAudioDurationSeconds = info.durationSeconds
+                        payloadAudioSampleRate = info.sampleRate
+                        payloadAudioChannels = info.numChannels
+                        trimStartSeconds = 0.0
+                        trimEndSeconds = info.durationSeconds
+                        payloadAudioFileName = resolvedName
+                    }
+                } catch (e: Exception) {
+                    statusMessage = "Failed to load audio: ${e.message}"
                     isError = true
                 }
             }
@@ -450,6 +504,63 @@ private fun MainScreenContent(
         }
     }
 
+    val saveExtractedOpusPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("audio/opus")
+    ) { uri: Uri? ->
+        uri?.let {
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    extractedPayload?.data?.let { data ->
+                        val bytesToWrite = if (OpusCodecBridge.isWav(data)) {
+                            val info = AudioLsbEngine.parseWav(data)
+                            val pcm = data.copyOfRange(info.dataOffset, info.dataOffset + info.dataSize)
+                            OpusCodecBridge.encodeToOpusPcm(
+                                context,
+                                pcm,
+                                info.sampleRate,
+                                info.numChannels,
+                                32_000,
+                                OpusProfile.VOICE
+                            )
+                        } else {
+                            data
+                        }
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            out.write(bytesToWrite)
+                        }
+                        extractStatusMessage = "Opus audio saved successfully"
+                        extractIsError = false
+                    }
+                } catch (e: Exception) {
+                    extractStatusMessage = "Failed to save Opus: ${e.message}"
+                    extractIsError = true
+                }
+            }
+        }
+    }
+
+    val saveExtractedWavPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("audio/wav")
+    ) { uri: Uri? ->
+        uri?.let {
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    extractedPayload?.data?.let { data ->
+                        val wavBytes = OpusCodecBridge.decodeOpusToPcmWav(context, data)
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            out.write(wavBytes)
+                        }
+                        extractStatusMessage = "WAV audio saved successfully"
+                        extractIsError = false
+                    }
+                } catch (e: Exception) {
+                    extractStatusMessage = "Failed to save WAV: ${e.message}"
+                    extractIsError = true
+                }
+            }
+        }
+    }
+
     val saveRawDumpPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri: Uri? ->
@@ -487,20 +598,44 @@ private fun MainScreenContent(
             CarrierType.TEXT -> Int.MAX_VALUE
         }
     }
+    val targetBitrateBps = remember(payloadAudioDurationSeconds, trimStartSeconds, trimEndSeconds, availableCapacity, opusProfile) {
+        val duration = maxOf(0.1, trimEndSeconds - trimStartSeconds)
+        val cap = if (availableCapacity in 1..Int.MAX_VALUE - 1000) {
+            maxOf(0, availableCapacity - 64)
+        } else {
+            32_000
+        }
+        OpusCodecBridge.calculateTargetBitrate(
+            durationSeconds = duration,
+            availableCapacityBytes = cap,
+            profile = opusProfile
+        )
+    }
 
-    val rawPayloadBytes = remember(payloadTab, secretText, payloadFileBytes) {
-        when (payloadTab) {
-            PayloadTab.TEXT -> secretText.toByteArray(Charsets.UTF_8)
-            PayloadTab.FILE -> payloadFileBytes ?: ByteArray(0)
+    val estimatedAudioBytes = remember(payloadTab, payloadAudioRawPcmWav, trimStartSeconds, trimEndSeconds, targetBitrateBps) {
+        if (payloadTab != PayloadTab.AUDIO || payloadAudioRawPcmWav == null) 0
+        else {
+            val dur = maxOf(0.1, trimEndSeconds - trimStartSeconds)
+            ((targetBitrateBps.toLong() * dur) / 8.0).toInt().coerceAtLeast(100)
         }
     }
 
-    val estimatedContainerSize = remember(rawPayloadBytes, encryptEnabled, preserveFileName, payloadFileName, payloadTab) {
+    val rawPayloadBytes = remember(payloadTab, secretText, payloadFileBytes, payloadAudioRawPcmWav, estimatedAudioBytes) {
+        when (payloadTab) {
+            PayloadTab.TEXT -> secretText.toByteArray(Charsets.UTF_8)
+            PayloadTab.FILE -> payloadFileBytes ?: ByteArray(0)
+            PayloadTab.AUDIO -> if (payloadAudioRawPcmWav == null) ByteArray(0) else ByteArray(estimatedAudioBytes)
+        }
+    }
+
+    val estimatedContainerSize = remember(rawPayloadBytes, encryptEnabled, preserveFileName, payloadFileName, payloadTab, payloadAudioFileName) {
         if (rawPayloadBytes.isEmpty()) 0
         else {
-            val fileNameBytesLen = if (payloadTab == PayloadTab.FILE && preserveFileName && payloadFileName != null) {
-                1 + payloadFileName!!.toByteArray(Charsets.UTF_8).size
-            } else 0
+            val fileNameBytesLen = when (payloadTab) {
+                PayloadTab.FILE -> if (preserveFileName && payloadFileName != null) 1 + payloadFileName!!.toByteArray(Charsets.UTF_8).size else 0
+                PayloadTab.AUDIO -> if (payloadAudioFileName != null) 1 + (payloadAudioFileName!!.substringBeforeLast('.') + ".opus").toByteArray(Charsets.UTF_8).size else 0
+                PayloadTab.TEXT -> 0
+            }
             val headerSize = StegoProtocol.HEADER_MIN_LENGTH + (if (encryptEnabled) 28 else 0) + fileNameBytesLen
             val dataSize = rawPayloadBytes.size + (if (encryptEnabled) 16 else 0)
             headerSize + dataSize
@@ -869,6 +1004,11 @@ private fun MainScreenContent(
                                                 onSelect = { payloadTab = PayloadTab.TEXT }
                                             )
                                             CarrierTypeChip(
+                                                title = "Audio",
+                                                selected = payloadTab == PayloadTab.AUDIO,
+                                                onSelect = { payloadTab = PayloadTab.AUDIO }
+                                            )
+                                            CarrierTypeChip(
                                                 title = "File",
                                                 selected = payloadTab == PayloadTab.FILE,
                                                 onSelect = { payloadTab = PayloadTab.FILE }
@@ -897,6 +1037,209 @@ private fun MainScreenContent(
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
+                                        }
+                                        PayloadTab.AUDIO -> {
+                                            // 1. Audio file picker (supports .wav, .mp3, .m4a, .ogg, .flac)
+                                            Button(
+                                                onClick = { payloadAudioPicker.launch(arrayOf("audio/*", "application/ogg", "*/*")) },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                shape = RoundedCornerShape(28.dp),
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                                    contentColor = MaterialTheme.colorScheme.onSurface
+                                                )
+                                            ) {
+                                                Icon(Icons.Default.Audiotrack, contentDescription = null)
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(payloadAudioFileName ?: "Select Audio (.wav, .mp3, .m4a, .ogg, .flac)")
+                                            }
+                                            if (payloadAudioRawPcmWav != null) {
+                                                Text(
+                                                    text = "Duration: ${formatDuration(payloadAudioDurationSeconds)} (${payloadAudioSampleRate} Hz, ${if (payloadAudioChannels == 1) "Mono" else "Stereo"})",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+
+                                            // 2. Opus Profile Selector: [ Voice ] | [ Music ] pill chips
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = "Opus Profile",
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                    CarrierTypeChip(
+                                                        title = "Voice",
+                                                        selected = opusProfile == OpusProfile.VOICE,
+                                                        onSelect = { opusProfile = OpusProfile.VOICE }
+                                                    )
+                                                    CarrierTypeChip(
+                                                        title = "Music",
+                                                        selected = opusProfile == OpusProfile.MUSIC,
+                                                        onSelect = { opusProfile = OpusProfile.MUSIC }
+                                                    )
+                                                }
+                                            }
+
+                                            // 3. Smart Bitrate Badge: displays calculated target bitrate (e.g. 16 kbps Opus Voice)
+                                            Surface(
+                                                shape = RoundedCornerShape(14.dp),
+                                                color = MaterialTheme.colorScheme.secondaryContainer,
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Text(
+                                                        text = "Target Bitrate",
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                                    )
+                                                    Text(
+                                                        text = "${targetBitrateBps / 1000} kbps Opus ${if (opusProfile == OpusProfile.VOICE) "Voice" else "Music"}",
+                                                        style = MaterialTheme.typography.labelLarge,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                                    )
+                                                }
+                                            }
+
+                                            // 4. Trimmer Section (if audio is loaded)
+                                            if (payloadAudioRawPcmWav != null && payloadAudioDurationSeconds > 0.0) {
+                                                Column(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .background(
+                                                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                                            shape = RoundedCornerShape(16.dp)
+                                                        )
+                                                        .padding(12.dp),
+                                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Text(
+                                                            text = "Audio Trimmer",
+                                                            style = MaterialTheme.typography.labelMedium,
+                                                            fontWeight = FontWeight.SemiBold,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                        Text(
+                                                            text = "${formatDuration(trimStartSeconds)} - ${formatDuration(trimEndSeconds)}",
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = MaterialTheme.colorScheme.primary
+                                                        )
+                                                    }
+
+                                                    RangeSlider(
+                                                        value = trimStartSeconds.toFloat()..trimEndSeconds.toFloat(),
+                                                        onValueChange = { range ->
+                                                            trimStartSeconds = range.start.toDouble()
+                                                            trimEndSeconds = range.endInclusive.toDouble()
+                                                        },
+                                                        valueRange = 0f..maxOf(0.1f, payloadAudioDurationSeconds.toFloat()),
+                                                        modifier = Modifier.fillMaxWidth()
+                                                    )
+
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        OutlinedTextField(
+                                                            value = "%.1f".format(Locale.US, trimStartSeconds),
+                                                            onValueChange = { str ->
+                                                                str.toDoubleOrNull()?.let { v ->
+                                                                    trimStartSeconds = v.coerceIn(0.0, trimEndSeconds)
+                                                                }
+                                                            },
+                                                            label = { Text("Start (s)") },
+                                                            modifier = Modifier.weight(1f),
+                                                            singleLine = true,
+                                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                                            shape = RoundedCornerShape(12.dp)
+                                                        )
+
+                                                        OutlinedTextField(
+                                                            value = "%.1f".format(Locale.US, trimEndSeconds),
+                                                            onValueChange = { str ->
+                                                                str.toDoubleOrNull()?.let { v ->
+                                                                    trimEndSeconds = v.coerceIn(trimStartSeconds, payloadAudioDurationSeconds)
+                                                                }
+                                                            },
+                                                            label = { Text("End (s)") },
+                                                            modifier = Modifier.weight(1f),
+                                                            singleLine = true,
+                                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                                            shape = RoundedCornerShape(12.dp)
+                                                        )
+
+                                                        Button(
+                                                            onClick = {
+                                                                if (isPreviewPlaying) {
+                                                                    try { previewAudioTrack?.stop(); previewAudioTrack?.release(); previewAudioTrack = null } catch (_: Throwable) {}
+                                                                    isPreviewPlaying = false
+                                                                } else {
+                                                                    try {
+                                                                        val wav = payloadAudioRawPcmWav
+                                                                        if (wav != null) {
+                                                                            val trimmedWav = OpusCodecBridge.trimWav(wav, trimStartSeconds, trimEndSeconds)
+                                                                            val info = AudioLsbEngine.parseWav(trimmedWav)
+                                                                            val minBuf = AudioTrack.getMinBufferSize(
+                                                                                info.sampleRate,
+                                                                                if (info.numChannels == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO,
+                                                                                AudioFormat.ENCODING_PCM_16BIT
+                                                                            )
+                                                                            val track = AudioTrack(
+                                                                                AudioAttributes.Builder()
+                                                                                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                                                                                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                                                                    .build(),
+                                                                                AudioFormat.Builder()
+                                                                                    .setSampleRate(info.sampleRate)
+                                                                                    .setChannelMask(if (info.numChannels == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO)
+                                                                                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                                                                    .build(),
+                                                                                maxOf(minBuf, info.dataSize),
+                                                                                AudioTrack.MODE_STREAM,
+                                                                                AudioManager.AUDIO_SESSION_ID_GENERATE
+                                                                            )
+                                                                            track.play()
+                                                                            track.write(trimmedWav, info.dataOffset, info.dataSize)
+                                                                            previewAudioTrack = track
+                                                                            isPreviewPlaying = true
+                                                                        }
+                                                                    } catch (e: Exception) {
+                                                                        statusMessage = "Preview error: ${e.message}"
+                                                                    }
+                                                                }
+                                                            },
+                                                            shape = RoundedCornerShape(16.dp),
+                                                            colors = ButtonDefaults.buttonColors(
+                                                                containerColor = if (isPreviewPlaying) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                                            )
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = if (isPreviewPlaying) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                                                contentDescription = null
+                                                            )
+                                                            Spacer(modifier = Modifier.width(4.dp))
+                                                            Text(if (isPreviewPlaying) "Stop" else "Preview")
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                         PayloadTab.FILE -> {
                                             Button(
@@ -1122,10 +1465,45 @@ private fun MainScreenContent(
                                         isError = false
                                         coroutineScope.launch {
                                             try {
+                                                val dataForText = withContext(Dispatchers.Default) {
+                                                    when (payloadTab) {
+                                                        PayloadTab.TEXT -> secretText.toByteArray(Charsets.UTF_8)
+                                                        PayloadTab.FILE -> payloadFileBytes ?: ByteArray(0)
+                                                        PayloadTab.AUDIO -> {
+                                                            val wav = payloadAudioRawPcmWav
+                                                            if (wav == null) ByteArray(0)
+                                                            else {
+                                                                val info = AudioLsbEngine.parseWav(wav)
+                                                                val rawPcm = wav.copyOfRange(info.dataOffset, info.dataOffset + info.dataSize)
+                                                                val trimmedPcm = OpusCodecBridge.trimPcm(
+                                                                    rawPcm,
+                                                                    info.sampleRate,
+                                                                    info.numChannels,
+                                                                    trimStartSeconds,
+                                                                    trimEndSeconds
+                                                                )
+                                                                val trimmedDuration = maxOf(0.1, trimEndSeconds - trimStartSeconds)
+                                                                val bitrate = OpusCodecBridge.calculateTargetBitrate(
+                                                                    durationSeconds = trimmedDuration,
+                                                                    availableCapacityBytes = 32_000,
+                                                                    profile = opusProfile
+                                                                )
+                                                                OpusCodecBridge.encodeToOpusPcm(
+                                                                    context = context,
+                                                                    pcmBytes = trimmedPcm,
+                                                                    sampleRate = info.sampleRate,
+                                                                    channels = info.numChannels,
+                                                                    bitrateBps = bitrate,
+                                                                    profile = opusProfile
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                                 val output = withContext(Dispatchers.Default) {
                                                     ZeroWidthStego.encode(
                                                         coverText = coverText,
-                                                        secretData = rawPayloadBytes,
+                                                        secretData = dataForText,
                                                         password = if (encryptEnabled) password else null
                                                     )
                                                 }
@@ -1160,14 +1538,61 @@ private fun MainScreenContent(
 
                                     coroutineScope.launch {
                                         try {
-                                            val type = if (payloadTab == PayloadTab.TEXT) PayloadType.TEXT else PayloadType.FILE
+                                            val type = when (payloadTab) {
+                                                PayloadTab.TEXT -> PayloadType.TEXT
+                                                PayloadTab.AUDIO -> PayloadType.AUDIO
+                                                PayloadTab.FILE -> PayloadType.FILE
+                                            }
+                                            val dataToPack = withContext(Dispatchers.Default) {
+                                                when (payloadTab) {
+                                                    PayloadTab.TEXT -> secretText.toByteArray(Charsets.UTF_8)
+                                                    PayloadTab.FILE -> payloadFileBytes ?: ByteArray(0)
+                                                    PayloadTab.AUDIO -> {
+                                                        val wav = payloadAudioRawPcmWav
+                                                        if (wav == null) ByteArray(0)
+                                                        else {
+                                                            val info = AudioLsbEngine.parseWav(wav)
+                                                            val rawPcm = wav.copyOfRange(info.dataOffset, info.dataOffset + info.dataSize)
+                                                            val trimmedPcm = OpusCodecBridge.trimPcm(
+                                                                rawPcm,
+                                                                info.sampleRate,
+                                                                info.numChannels,
+                                                                trimStartSeconds,
+                                                                trimEndSeconds
+                                                            )
+                                                            val trimmedDuration = maxOf(0.1, trimEndSeconds - trimStartSeconds)
+                                                            val bitrate = OpusCodecBridge.calculateTargetBitrate(
+                                                                durationSeconds = trimmedDuration,
+                                                                availableCapacityBytes = if (availableCapacity in 1..Int.MAX_VALUE - 1000) availableCapacity - 64 else 32_000,
+                                                                profile = opusProfile
+                                                            )
+                                                            OpusCodecBridge.encodeToOpusPcm(
+                                                                context = context,
+                                                                pcmBytes = trimmedPcm,
+                                                                sampleRate = info.sampleRate,
+                                                                channels = info.numChannels,
+                                                                bitrateBps = bitrate,
+                                                                profile = opusProfile
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            val payloadOutFileName = when (payloadTab) {
+                                                PayloadTab.FILE -> if (preserveFileName) payloadFileName else null
+                                                PayloadTab.AUDIO -> {
+                                                    val base = payloadAudioFileName?.substringBeforeLast('.') ?: "audio_payload"
+                                                    "$base.opus"
+                                                }
+                                                PayloadTab.TEXT -> null
+                                            }
                                             val container = withContext(Dispatchers.Default) {
                                                 StegoProtocol.packPayload(
                                                     type = type,
-                                                    data = rawPayloadBytes,
+                                                    data = dataToPack,
                                                     password = if (encryptEnabled) password else null,
                                                     bitsPerUnit = bitsPerUnit,
-                                                    fileName = if (type == PayloadType.FILE && preserveFileName) payloadFileName else null
+                                                    fileName = payloadOutFileName
                                                 )
                                             }
 
@@ -2116,67 +2541,115 @@ private fun MainScreenContent(
                                                 }
                                             }
                                             PayloadType.AUDIO -> {
-                                                Row(
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                                ) {
+                                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                                    Text(
+                                                        text = "Audio Payload: ${payload.fileName ?: "extracted_audio.opus"} (${formatBytes(payload.data.size)})",
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        fontWeight = FontWeight.Medium
+                                                    )
+
                                                     Button(
                                                         onClick = {
                                                             if (isPlayingAudio) {
-                                                                currentAudioTrack?.stop()
-                                                                currentAudioTrack?.release()
-                                                                currentAudioTrack = null
+                                                                try { currentMediaPlayer?.stop(); currentMediaPlayer?.release(); currentMediaPlayer = null } catch (_: Throwable) {}
+                                                                try { currentAudioTrack?.stop(); currentAudioTrack?.release(); currentAudioTrack = null } catch (_: Throwable) {}
                                                                 isPlayingAudio = false
                                                             } else {
                                                                 try {
-                                                                    val info = AudioLsbEngine.parseWav(payload.data)
-                                                                    val minBuf = AudioTrack.getMinBufferSize(
-                                                                        info.sampleRate,
-                                                                        if (info.numChannels == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO,
-                                                                        AudioFormat.ENCODING_PCM_16BIT
-                                                                    )
-                                                                    val track = AudioTrack(
-                                                                        AudioAttributes.Builder()
-                                                                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                                                                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                                                                            .build(),
-                                                                        AudioFormat.Builder()
-                                                                            .setSampleRate(info.sampleRate)
-                                                                            .setChannelMask(if (info.numChannels == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO)
-                                                                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                                                                            .build(),
-                                                                        maxOf(minBuf, info.dataSize),
-                                                                        AudioTrack.MODE_STREAM,
-                                                                        AudioManager.AUDIO_SESSION_ID_GENERATE
-                                                                    )
-                                                                    track.play()
-                                                                    track.write(payload.data, info.dataOffset, info.dataSize)
-                                                                    currentAudioTrack = track
+                                                                    val isWavData = OpusCodecBridge.isWav(payload.data)
+                                                                    val tempSuffix = if (isWavData) ".wav" else ".opus"
+                                                                    val tempPlayFile = File.createTempFile("stego_play_audio_", tempSuffix, context.cacheDir)
+                                                                    tempPlayFile.writeBytes(payload.data)
+
+                                                                    val mp = MediaPlayer()
+                                                                    mp.setDataSource(tempPlayFile.absolutePath)
+                                                                    mp.setOnCompletionListener {
+                                                                        isPlayingAudio = false
+                                                                        try { mp.release() } catch (_: Throwable) {}
+                                                                        tempPlayFile.delete()
+                                                                        currentMediaPlayer = null
+                                                                    }
+                                                                    mp.prepare()
+                                                                    mp.start()
+                                                                    currentMediaPlayer = mp
                                                                     isPlayingAudio = true
                                                                 } catch (e: Exception) {
-                                                                    extractStatusMessage = "Playback failed: ${e.message}"
+                                                                    // Fallback to AudioTrack PCM WAV playback
+                                                                    try {
+                                                                        val pcmWav = OpusCodecBridge.decodeOpusToPcmWav(context, payload.data)
+                                                                        val info = AudioLsbEngine.parseWav(pcmWav)
+                                                                        val minBuf = AudioTrack.getMinBufferSize(
+                                                                            info.sampleRate,
+                                                                            if (info.numChannels == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO,
+                                                                            AudioFormat.ENCODING_PCM_16BIT
+                                                                        )
+                                                                        val track = AudioTrack(
+                                                                            AudioAttributes.Builder()
+                                                                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                                                                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                                                                .build(),
+                                                                            AudioFormat.Builder()
+                                                                                .setSampleRate(info.sampleRate)
+                                                                                .setChannelMask(if (info.numChannels == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO)
+                                                                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                                                                .build(),
+                                                                            maxOf(minBuf, info.dataSize),
+                                                                            AudioTrack.MODE_STREAM,
+                                                                            AudioManager.AUDIO_SESSION_ID_GENERATE
+                                                                        )
+                                                                        track.play()
+                                                                        track.write(pcmWav, info.dataOffset, info.dataSize)
+                                                                        currentAudioTrack = track
+                                                                        isPlayingAudio = true
+                                                                    } catch (ex: Exception) {
+                                                                        extractStatusMessage = "Playback failed: ${ex.message}"
+                                                                    }
                                                                 }
                                                             }
                                                         },
-                                                        modifier = Modifier.weight(1f),
-                                                        shape = RoundedCornerShape(28.dp)
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        shape = RoundedCornerShape(28.dp),
+                                                        colors = ButtonDefaults.buttonColors(
+                                                            containerColor = if (isPlayingAudio) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                                        )
                                                     ) {
                                                         Icon(
                                                             imageVector = if (isPlayingAudio) Icons.Default.Stop else Icons.Default.PlayArrow,
                                                             contentDescription = null
                                                         )
                                                         Spacer(modifier = Modifier.width(8.dp))
-                                                        Text(if (isPlayingAudio) "Stop" else "Play")
+                                                        Text(if (isPlayingAudio) "Stop Audio" else "Play Audio")
                                                     }
 
-                                                    Button(
-                                                        onClick = { saveExtractedFilePicker.launch("extracted_audio.wav") },
-                                                        modifier = Modifier.weight(1f),
-                                                        shape = RoundedCornerShape(28.dp)
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                                                     ) {
-                                                        Icon(Icons.Default.Download, contentDescription = null)
-                                                        Spacer(modifier = Modifier.width(8.dp))
-                                                        Text("Save")
+                                                        Button(
+                                                            onClick = {
+                                                                val base = payload.fileName?.substringBeforeLast('.') ?: "extracted_audio"
+                                                                saveExtractedOpusPicker.launch("$base.opus")
+                                                            },
+                                                            modifier = Modifier.weight(1f),
+                                                            shape = RoundedCornerShape(28.dp)
+                                                        ) {
+                                                            Icon(Icons.Default.Download, contentDescription = null)
+                                                            Spacer(modifier = Modifier.width(6.dp))
+                                                            Text("Save .opus")
+                                                        }
+
+                                                        Button(
+                                                            onClick = {
+                                                                val base = payload.fileName?.substringBeforeLast('.') ?: "extracted_audio"
+                                                                saveExtractedWavPicker.launch("$base.wav")
+                                                            },
+                                                            modifier = Modifier.weight(1f),
+                                                            shape = RoundedCornerShape(28.dp)
+                                                        ) {
+                                                            Icon(Icons.Default.Download, contentDescription = null)
+                                                            Spacer(modifier = Modifier.width(6.dp))
+                                                            Text("Save .wav")
+                                                        }
                                                     }
                                                 }
                                             }
@@ -2355,4 +2828,11 @@ private fun formatHexDump(bytes: ByteArray, maxLines: Int = 16): String {
         sb.append("... (${bytes.size - maxLines * 16} more bytes)")
     }
     return sb.toString()
+}
+
+private fun formatDuration(seconds: Double): String {
+    val totalSec = seconds.toInt().coerceAtLeast(0)
+    val mins = totalSec / 60
+    val secs = totalSec % 60
+    return "%02d:%02d".format(Locale.US, mins, secs)
 }
