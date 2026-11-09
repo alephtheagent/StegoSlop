@@ -8,7 +8,6 @@ import android.graphics.BitmapFactory
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
-import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -242,7 +241,6 @@ private fun MainScreenContent(
     // Audio Playback state
     var showPlayerSheet by remember { mutableStateOf(false) }
     var isPlayingAudio by remember { mutableStateOf(false) }
-    var currentAudioTrack by remember { mutableStateOf<AudioTrack?>(null) }
     var currentMediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
 
     // Audio Payload state (Inject)
@@ -255,7 +253,7 @@ private fun MainScreenContent(
     var trimStartSeconds by remember { mutableDoubleStateOf(0.0) }
     var trimEndSeconds by remember { mutableDoubleStateOf(0.0) }
     var isPreviewPlaying by remember { mutableStateOf(false) }
-    var previewAudioTrack by remember { mutableStateOf<AudioTrack?>(null) }
+    var previewMediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
 
     // File pickers
     val injectCarrierPicker = rememberLauncherForActivityResult(
@@ -618,7 +616,7 @@ private fun MainScreenContent(
         if (payloadTab != PayloadTab.AUDIO || payloadAudioRawPcmWav == null) 0
         else {
             val dur = maxOf(0.1, trimEndSeconds - trimStartSeconds)
-            (((targetBitrateBps.toLong() * dur) / 8.0) * 1.25).toInt().coerceAtLeast(100)
+            ((targetBitrateBps.toLong() * dur) / 8.0).toInt().coerceAtLeast(100)
         }
     }
 
@@ -1208,36 +1206,27 @@ private fun MainScreenContent(
                                                         Button(
                                                             onClick = {
                                                                 if (isPreviewPlaying) {
-                                                                    try { previewAudioTrack?.stop(); previewAudioTrack?.release(); previewAudioTrack = null } catch (_: Throwable) {}
+                                                                    try { previewMediaPlayer?.stop(); previewMediaPlayer?.release(); previewMediaPlayer = null } catch (_: Throwable) {}
                                                                     isPreviewPlaying = false
                                                                 } else {
                                                                     try {
                                                                         val wav = payloadAudioRawPcmWav
                                                                         if (wav != null) {
                                                                             val trimmedWav = OpusCodecBridge.trimWav(wav, trimStartSeconds, trimEndSeconds)
-                                                                            val info = AudioLsbEngine.parseWav(trimmedWav)
-                                                                            val minBuf = AudioTrack.getMinBufferSize(
-                                                                                info.sampleRate,
-                                                                                if (info.numChannels == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO,
-                                                                                AudioFormat.ENCODING_PCM_16BIT
-                                                                            )
-                                                                            val track = AudioTrack(
-                                                                                AudioAttributes.Builder()
-                                                                                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                                                                                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                                                                                    .build(),
-                                                                                AudioFormat.Builder()
-                                                                                    .setSampleRate(info.sampleRate)
-                                                                                    .setChannelMask(if (info.numChannels == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO)
-                                                                                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                                                                                    .build(),
-                                                                                maxOf(minBuf, info.dataSize),
-                                                                                AudioTrack.MODE_STREAM,
-                                                                                AudioManager.AUDIO_SESSION_ID_GENERATE
-                                                                            )
-                                                                            track.play()
-                                                                            track.write(trimmedWav, info.dataOffset, info.dataSize)
-                                                                            previewAudioTrack = track
+                                                                            val tempPreviewFile = File.createTempFile("stego_preview_", ".wav", context.cacheDir)
+                                                                            tempPreviewFile.writeBytes(trimmedWav)
+                                                                            val mp = MediaPlayer().apply {
+                                                                                setDataSource(tempPreviewFile.absolutePath)
+                                                                                setOnCompletionListener {
+                                                                                    isPreviewPlaying = false
+                                                                                    try { release() } catch (_: Throwable) {}
+                                                                                    tempPreviewFile.delete()
+                                                                                    previewMediaPlayer = null
+                                                                                }
+                                                                                prepare()
+                                                                                start()
+                                                                            }
+                                                                            previewMediaPlayer = mp
                                                                             isPreviewPlaying = true
                                                                         }
                                                                     } catch (e: Exception) {
