@@ -47,9 +47,9 @@ jobs:
       - name: Verify Core Architecture & Protocols
         run: |
           echo "Verifying SLOP protocol magic header..."
-          grep -q 'MAGIC = "SLOP"' app/src/main/java/com/p0lymatic/stegoslop/core/StegoProtocol.kt
+          grep -q 'MAGIC_BYTES' app/src/main/java/com/p0lymatic/stegoslop/core/StegoProtocol.kt
           echo "Verifying AES-GCM crypto security..."
           grep -q 'AES/GCM/NoPadding' app/src/main/java/com/p0lymatic/stegoslop/core/CryptoUtils.kt
           echo "Verifying Telegram zero-width stego..."
-          grep -q 'ZWNJ' app/src/main/java/com/p0lymatic/stegoslop/core/ZeroWidthStego.kt
+          grep -q 'CHAR_ZERO' app/src/main/java/com/p0lymatic/stegoslop/core/ZeroWidthStego.kt
           echo "All core security invariants verified."
