@@ -47,6 +47,37 @@ class StegoEngineTest {
     }
 
     @Test
+    fun testProtocolPackingAndUnpackingWithFileName() {
+        val testData = "Sample file content for testing".toByteArray(Charsets.UTF_8)
+        val fileName = "document.pdf"
+
+        val packed = StegoProtocol.packPayload(
+            type = PayloadType.FILE,
+            data = testData,
+            fileName = fileName
+        )
+
+        val unpacked = StegoProtocol.unpackPayload(packed)
+        assertEquals(PayloadType.FILE, unpacked.type)
+        assertEquals(fileName, unpacked.fileName)
+        assertArrayEquals(testData, unpacked.data)
+
+        // Also test with encryption
+        val password = "Secr3tPassword!"
+        val encryptedPacked = StegoProtocol.packPayload(
+            type = PayloadType.FILE,
+            data = testData,
+            password = password,
+            fileName = fileName
+        )
+        val decryptedUnpacked = StegoProtocol.unpackPayload(encryptedPacked, password = password)
+        assertEquals(PayloadType.FILE, decryptedUnpacked.type)
+        assertEquals(fileName, decryptedUnpacked.fileName)
+        assertArrayEquals(testData, decryptedUnpacked.data)
+        assertTrue(decryptedUnpacked.isEncrypted)
+    }
+
+    @Test
     fun testProtocolEncryptionDecryption() {
         val secretMessage = "Confidential payload secured with AES-256-GCM"
         val messageBytes = secretMessage.toByteArray(Charsets.UTF_8)

@@ -28,7 +28,8 @@ data class UnpackedPayload(
     val type: PayloadType,
     val data: ByteArray,
     val isEncrypted: Boolean = false,
-    val bitsPerUnit: Int = 1
+    val bitsPerUnit: Int = 1,
+    val fileName: String? = null
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -38,6 +39,7 @@ data class UnpackedPayload(
         if (!data.contentEquals(other.data)) return false
         if (isEncrypted != other.isEncrypted) return false
         if (bitsPerUnit != other.bitsPerUnit) return false
+        if (fileName != other.fileName) return false
         return true
     }
 
@@ -46,6 +48,7 @@ data class UnpackedPayload(
         result = 31 * result + data.contentHashCode()
         result = 31 * result + isEncrypted.hashCode()
         result = 31 * result + bitsPerUnit
+        result = 31 * result + (fileName?.hashCode() ?: 0)
         return result
     }
 }
@@ -58,6 +61,7 @@ object StegoProtocol {
     const val SALT_LENGTH = 16
     const val IV_LENGTH = 12
     const val HEADER_MIN_LENGTH = 14 // 4 (magic) + 1 (type) + 1 (flags) + 4 (length) + 4 (crc32)
+    const val FLAG_HAS_FILENAME = 0x08
 
     /**
      * Packs payload data into a StegoSlop container.
@@ -66,7 +70,8 @@ object StegoProtocol {
         type: PayloadType,
         data: ByteArray,
         password: String? = null,
-        bitsPerUnit: Int = 1
+        bitsPerUnit: Int = 1,
+        fileName: String? = null
     ): ByteArray {
         val isEncrypted = !password.isNullOrEmpty()
         val bpuCode = when (bitsPerUnit) {
@@ -79,6 +84,15 @@ object StegoProtocol {
         var flags = (bpuCode shl 1)
         if (isEncrypted) {
             flags = flags or 0x01
+        }
+
+        val fileNameBytes = if (fileName != null) {
+            flags = flags or FLAG_HAS_FILENAME
+            val bytes = fileName.toByteArray(Charsets.UTF_8)
+            require(bytes.size <= 255) { "Filename too long (max 255 bytes in UTF-8)" }
+            bytes
+        } else {
+            null
         }
 
         val salt: ByteArray?
@@ -96,7 +110,8 @@ object StegoProtocol {
         }
 
         val crc = CRC32().apply { update(payloadData) }.value
-        val headerLength = HEADER_MIN_LENGTH + (if (isEncrypted) SALT_LENGTH + IV_LENGTH else 0)
+        val fileNameLength = if (fileNameBytes != null) 1 + fileNameBytes.size else 0
+        val headerLength = HEADER_MIN_LENGTH + (if (isEncrypted) SALT_LENGTH + IV_LENGTH else 0) + fileNameLength
         val totalSize = headerLength + payloadData.size
 
         val buffer = ByteBuffer.allocate(totalSize).order(ByteOrder.BIG_ENDIAN)
@@ -109,8 +124,11 @@ object StegoProtocol {
             buffer.put(salt!!)
             buffer.put(iv!!)
         }
+        if (fileNameBytes != null) {
+            buffer.put(fileNameBytes.size.toByte())
+            buffer.put(fileNameBytes)
+        }
         buffer.put(payloadData)
-
         return buffer.array()
     }
 
@@ -161,6 +179,18 @@ object StegoProtocol {
             }
             ByteArray(IV_LENGTH).also { buffer.get(it) }
         } else null
+        val fileName = if ((flags and FLAG_HAS_FILENAME) != 0) {
+            if (buffer.remaining() < 1) {
+                throw IllegalArgumentException("Container truncated: missing filename length")
+            }
+            val fileNameLen = buffer.get().toInt() and 0xFF
+            if (buffer.remaining() < fileNameLen) {
+                throw IllegalArgumentException("Container truncated: missing filename")
+            }
+            val fileNameBytes = ByteArray(fileNameLen)
+            buffer.get(fileNameBytes)
+            String(fileNameBytes, Charsets.UTF_8)
+        } else null
 
         if (buffer.remaining().toLong() < payloadLength) {
             throw IllegalArgumentException("Container truncated: expected $payloadLength payload bytes, found ${buffer.remaining()}")
@@ -191,7 +221,8 @@ object StegoProtocol {
             type = type,
             data = data,
             isEncrypted = isEncrypted,
-            bitsPerUnit = bitsPerUnit
+            bitsPerUnit = bitsPerUnit,
+            fileName = fileName
         )
     }
 }
