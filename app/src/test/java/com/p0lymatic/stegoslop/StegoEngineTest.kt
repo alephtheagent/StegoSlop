@@ -6,6 +6,10 @@ import com.p0lymatic.stegoslop.core.CryptoUtils
 import com.p0lymatic.stegoslop.core.ImageLsbEngine
 import com.p0lymatic.stegoslop.core.PayloadType
 import com.p0lymatic.stegoslop.core.StegoProtocol
+import com.p0lymatic.stegoslop.core.CamouflagePreset
+import com.p0lymatic.stegoslop.core.CamouflageUtils
+import com.p0lymatic.stegoslop.core.generateDecoyName
+import com.p0lymatic.stegoslop.core.randomizeDecoyName
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -231,5 +235,84 @@ class StegoEngineTest {
 
         assertFalse(AudioCodecBridge.isFlac(byteArrayOf('f'.code.toByte(), 'L'.code.toByte())))
         assertFalse(AudioCodecBridge.isFlac(ByteArray(0)))
+    }
+
+    @Test
+    fun testCamouflagePresetsOutputsNonEmptyWithCorrectExtension() {
+        val extensions = listOf("png", ".png", "wav", ".wav")
+        for (preset in CamouflagePreset.entries) {
+            for (ext in extensions) {
+                val clean = ext.trimStart('.')
+                val name = generateDecoyName(preset, ext)
+                assertNotNull("Preset $preset generated null name", name)
+                assertTrue("Preset $preset name should not be blank", name.isNotBlank())
+                assertTrue(
+                    "Preset $preset name '$name' should end with '.$clean'",
+                    name.endsWith(".$clean")
+                )
+                assertFalse(
+                    "Preset $preset name '$name' should not contain double dots",
+                    name.contains("..")
+                )
+
+                val objName = CamouflageUtils.generateDecoyName(preset, ext)
+                assertTrue(objName.endsWith(".$clean"))
+            }
+        }
+    }
+
+    @Test
+    fun testCamouflagePresetSpecificFormats() {
+        val screenshot = generateDecoyName(CamouflagePreset.SCREENSHOT, "png")
+        assertTrue(screenshot.startsWith("Screenshot_"))
+        assertTrue(screenshot.endsWith(".png"))
+
+        val camera = generateDecoyName(CamouflagePreset.CAMERA_DCIM, "png")
+        assertTrue(camera.matches(Regex("""^IMG_\d{4}\.png$""")))
+
+        val youtube = generateDecoyName(CamouflagePreset.YOUTUBE, "png")
+        assertEquals("maxresdefault.png", youtube)
+
+        val telegram = generateDecoyName(CamouflagePreset.TELEGRAM, "png")
+        assertTrue(telegram.startsWith("photo_"))
+        assertTrue(telegram.endsWith(".png"))
+
+        val vk = generateDecoyName(CamouflagePreset.VK_HASH, "png")
+        assertTrue(vk.matches(Regex("""^vk_photo_[0-9a-f]{8}\.png$""")))
+
+        val waImage = generateDecoyName(CamouflagePreset.WHATSAPP, "png")
+        assertTrue(waImage.matches(Regex("""^IMG-\d{8}-WA\d{4}\.png$""")))
+
+        val waAudio = generateDecoyName(CamouflagePreset.WHATSAPP, "wav")
+        assertTrue(waAudio.matches(Regex("""^AUD-\d{8}-WA\d{4}\.wav$""")))
+
+        val voice = generateDecoyName(CamouflagePreset.VOICE, "wav")
+        assertTrue(voice.startsWith("Voice_"))
+        assertTrue(voice.endsWith(".wav"))
+
+        val track = generateDecoyName(CamouflagePreset.TRACK, "wav")
+        assertTrue(track.matches(Regex("""^track_\d{2}\.wav$""")))
+
+        val genericImage = generateDecoyName(CamouflagePreset.GENERIC, "png")
+        assertEquals("image.png", genericImage)
+
+        val genericAudio = generateDecoyName(CamouflagePreset.GENERIC, "wav")
+        assertEquals("audio.wav", genericAudio)
+    }
+
+    @Test
+    fun testRandomizeDecoyName() {
+        for (i in 0 until 20) {
+            val imgDecoy = randomizeDecoyName(isAudio = false, extension = "png")
+            assertTrue("Decoy image name should not be blank", imgDecoy.isNotBlank())
+            assertTrue("Decoy image name should end with .png", imgDecoy.endsWith(".png"))
+
+            val audDecoy = randomizeDecoyName(isAudio = true, extension = "wav")
+            assertTrue("Decoy audio name should not be blank", audDecoy.isNotBlank())
+            assertTrue("Decoy audio name should end with .wav", audDecoy.endsWith(".wav"))
+
+            val objAudDecoy = CamouflageUtils.randomizeDecoyName(isAudio = true, extension = "flac")
+            assertTrue("Decoy flac name should end with .flac", objAudDecoy.endsWith(".flac"))
+        }
     }
 }
