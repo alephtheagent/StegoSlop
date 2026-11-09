@@ -207,7 +207,7 @@ fun AboutScreen(onBack: () -> Unit) {
                         }
 
                         OutlinedButton(
-                            onClick = { uriHandler.openUri("https://git.plmtc.ru/aleph/StegoSlop") },
+                            onClick = { uriHandler.openUri("https://git.plmtc.ru/p0lymatic/StegoSlop") },
                             shape = RoundedCornerShape(16.dp),
                             modifier = Modifier.weight(1f)
                         ) {
