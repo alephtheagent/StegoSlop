@@ -529,46 +529,6 @@ private fun MainScreenContent(
                     )
                 },
                 actions = {
-                    if (hasCarrier) {
-                        val formatBadge = when (activeMode) {
-                            AppMode.INJECT -> {
-                                when (carrierType) {
-                                    CarrierType.IMAGE -> carrierFormatBadge ?: "PNG"
-                                    CarrierType.AUDIO -> carrierFormatBadge ?: "WAV"
-                                    CarrierType.TEXT -> "TEXT"
-                                }
-                            }
-                            AppMode.EXTRACT -> {
-                                when (extractCarrierType) {
-                                    CarrierType.IMAGE -> extractCarrierFormatBadge ?: "PNG"
-                                    CarrierType.AUDIO -> extractCarrierFormatBadge ?: "WAV"
-                                    CarrierType.TEXT -> "TEXT"
-                                }
-                            }
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            modifier = Modifier.padding(end = 8.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                            ) {
-                                Canvas(modifier = Modifier.size(8.dp)) {
-                                    drawCircle(color = Color(0xFF00E599))
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Ready  $formatBadge",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            }
-                        }
-                    }
-
                     IconButton(
                         onClick = onOpenAbout,
                         modifier = Modifier.padding(end = 8.dp)
