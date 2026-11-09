@@ -1,5 +1,6 @@
 package com.p0lymatic.stegoslop
 
+import com.p0lymatic.stegoslop.core.AudioCodecBridge
 import com.p0lymatic.stegoslop.core.AudioLsbEngine
 import com.p0lymatic.stegoslop.core.CryptoUtils
 import com.p0lymatic.stegoslop.core.ImageLsbEngine
@@ -218,5 +219,17 @@ class StegoEngineTest {
             StegoProtocol.unpackPayload(badMagic)
         }
         assertTrue(magicEx.message?.contains("magic", ignoreCase = true) == true)
+    }
+
+    @Test
+    fun testAudioCodecBridgeIsFlac() {
+        val flacHeader = byteArrayOf('f'.code.toByte(), 'L'.code.toByte(), 'a'.code.toByte(), 'C'.code.toByte(), 0x00, 0x01)
+        assertTrue(AudioCodecBridge.isFlac(flacHeader))
+
+        val wavHeader = byteArrayOf('R'.code.toByte(), 'I'.code.toByte(), 'F'.code.toByte(), 'F'.code.toByte())
+        assertFalse(AudioCodecBridge.isFlac(wavHeader))
+
+        assertFalse(AudioCodecBridge.isFlac(byteArrayOf('f'.code.toByte(), 'L'.code.toByte())))
+        assertFalse(AudioCodecBridge.isFlac(ByteArray(0)))
     }
 }

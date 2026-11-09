@@ -140,33 +140,6 @@ fun AboutScreen(onBack: () -> Unit) {
                 }
             }
 
-            // Specs Card
-            Card(
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        text = "Specifications",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    SpecRow("Carrier Formats", "PNG (ARGB_8888), 16-bit PCM WAV")
-                    SpecRow("Steganography", "LSB (1, 2, or 4 bits per unit)")
-                    SpecRow("Payload Types", "Text, Image, Audio, Binary File")
-                    SpecRow("Security", "AES-256-GCM + PBKDF2 (10,000 iter)")
-                    SpecRow("Integrity", "Hardware-accelerated CRC32")
-                }
-            }
-
             // Contributors Card
             Card(
                 shape = RoundedCornerShape(24.dp),
@@ -244,27 +217,6 @@ fun AboutScreen(onBack: () -> Unit) {
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun SpecRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface
-        )
     }
 }
 

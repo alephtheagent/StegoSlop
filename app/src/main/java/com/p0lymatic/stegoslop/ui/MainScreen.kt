@@ -102,6 +102,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.p0lymatic.stegoslop.core.AudioCodecBridge
 import com.p0lymatic.stegoslop.core.AudioLsbEngine
 import com.p0lymatic.stegoslop.core.ImageLsbEngine
 import com.p0lymatic.stegoslop.core.PayloadType
@@ -136,10 +137,32 @@ fun MainScreen() {
         showAboutScreen = false
     }
 
-    if (showAboutScreen) {
-        AboutScreen(onBack = { showAboutScreen = false })
-        return
+    AnimatedContent(
+        targetState = showAboutScreen,
+        transitionSpec = {
+            if (targetState) {
+                (slideInHorizontally(animationSpec = tween(300)) { width -> width } + fadeIn(animationSpec = tween(300)))
+                    .togetherWith(slideOutHorizontally(animationSpec = tween(300)) { width -> -width / 3 } + fadeOut(animationSpec = tween(300)))
+            } else {
+                (slideInHorizontally(animationSpec = tween(300)) { width -> -width / 3 } + fadeIn(animationSpec = tween(300)))
+                    .togetherWith(slideOutHorizontally(animationSpec = tween(300)) { width -> width } + fadeOut(animationSpec = tween(300)))
+            }
+        },
+        label = "MainAboutTransition"
+    ) { isAbout ->
+        if (isAbout) {
+            AboutScreen(onBack = { showAboutScreen = false })
+        } else {
+            MainScreenContent(onOpenAbout = { showAboutScreen = true })
+        }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MainScreenContent(
+    onOpenAbout: () -> Unit
+) {
 
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -152,6 +175,7 @@ fun MainScreen() {
     var carrierBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var carrierWavBytes by remember { mutableStateOf<ByteArray?>(null) }
     var carrierFileName by remember { mutableStateOf<String?>(null) }
+    var carrierFormatBadge by remember { mutableStateOf<String?>(null) }
     var bitsPerUnit by remember { mutableIntStateOf(1) }
 
     // Payload state (Inject)
@@ -176,6 +200,7 @@ fun MainScreen() {
     var extractCarrierBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var extractCarrierWavBytes by remember { mutableStateOf<ByteArray?>(null) }
     var extractCarrierFileName by remember { mutableStateOf<String?>(null) }
+    var extractCarrierFormatBadge by remember { mutableStateOf<String?>(null) }
     var extractCarrierType by remember { mutableStateOf(CarrierType.IMAGE) }
     var extractPassword by remember { mutableStateOf("") }
     var extractPasswordVisible by remember { mutableStateOf(false) }
@@ -194,7 +219,7 @@ fun MainScreen() {
 
     // File pickers
     val injectCarrierPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let {
             coroutineScope.launch(Dispatchers.IO) {
@@ -204,11 +229,20 @@ fun MainScreen() {
                         val isWav = bytes.size >= 12 &&
                                 String(bytes, 0, 4, Charsets.US_ASCII) == "RIFF" &&
                                 String(bytes, 8, 4, Charsets.US_ASCII) == "WAVE"
+                        val isFlac = AudioCodecBridge.isFlac(bytes)
                         if (isWav) {
                             carrierType = CarrierType.AUDIO
                             carrierWavBytes = bytes
                             carrierBitmap = null
                             carrierFileName = "audio_carrier.wav"
+                            carrierFormatBadge = "WAV"
+                        } else if (isFlac) {
+                            val decodedWav = AudioCodecBridge.decodeFlacToPcmWav(context, bytes)
+                            carrierType = CarrierType.AUDIO
+                            carrierWavBytes = decodedWav
+                            carrierBitmap = null
+                            carrierFileName = "audio_carrier.flac"
+                            carrierFormatBadge = "FLAC"
                         } else {
                             val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                             if (bmp != null) {
@@ -219,6 +253,7 @@ fun MainScreen() {
                                 carrierBitmap = argbBmp
                                 carrierWavBytes = null
                                 carrierFileName = "image_carrier.png"
+                                carrierFormatBadge = "PNG"
                             }
                         }
                     }
@@ -250,7 +285,7 @@ fun MainScreen() {
     }
 
     val extractCarrierPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let {
             coroutineScope.launch(Dispatchers.IO) {
@@ -260,11 +295,20 @@ fun MainScreen() {
                         val isWav = bytes.size >= 12 &&
                                 String(bytes, 0, 4, Charsets.US_ASCII) == "RIFF" &&
                                 String(bytes, 8, 4, Charsets.US_ASCII) == "WAVE"
+                        val isFlac = AudioCodecBridge.isFlac(bytes)
                         if (isWav) {
                             extractCarrierType = CarrierType.AUDIO
                             extractCarrierWavBytes = bytes
                             extractCarrierBitmap = null
                             extractCarrierFileName = "stego_audio.wav"
+                            extractCarrierFormatBadge = "WAV"
+                        } else if (isFlac) {
+                            val decodedWav = AudioCodecBridge.decodeFlacToPcmWav(context, bytes)
+                            extractCarrierType = CarrierType.AUDIO
+                            extractCarrierWavBytes = decodedWav
+                            extractCarrierBitmap = null
+                            extractCarrierFileName = "stego_audio.flac"
+                            extractCarrierFormatBadge = "FLAC"
                         } else {
                             val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                             if (bmp != null) {
@@ -275,6 +319,7 @@ fun MainScreen() {
                                 extractCarrierBitmap = argbBmp
                                 extractCarrierWavBytes = null
                                 extractCarrierFileName = "stego_image.png"
+                                extractCarrierFormatBadge = "PNG"
                                 bitPlaneBitmap = ImageLsbEngine.generateBitPlane(argbBmp, bitPlaneIndex)
                             }
                         }
@@ -282,6 +327,47 @@ fun MainScreen() {
                 } catch (e: Exception) {
                     extractStatusMessage = "Failed to load carrier: ${e.message}"
                     extractIsError = true
+                }
+            }
+        }
+    }
+
+    val saveInjectedWavPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("audio/wav")
+    ) { uri: Uri? ->
+        uri?.let {
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        injectedWavBytes?.let { out.write(it) }
+                    }
+                    statusMessage = "WAV file saved successfully"
+                    isError = false
+                } catch (e: Exception) {
+                    statusMessage = "Failed to save WAV file: ${e.message}"
+                    isError = true
+                }
+            }
+        }
+    }
+
+    val saveInjectedFlacPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("audio/flac")
+    ) { uri: Uri? ->
+        uri?.let {
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    val flacBytes = injectedWavBytes?.let { AudioCodecBridge.encodePcmWavToFlac(context, it) }
+                    if (flacBytes != null) {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            out.write(flacBytes)
+                        }
+                        statusMessage = "FLAC file saved successfully"
+                        isError = false
+                    }
+                } catch (e: Exception) {
+                    statusMessage = "Failed to save FLAC file: ${e.message}"
+                    isError = true
                 }
             }
         }
@@ -392,30 +478,42 @@ fun MainScreen() {
                     )
                 },
                 actions = {
-                    Surface(
-                        shape = RoundedCornerShape(16.dp),
-                        color = if (hasCarrier) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
-                        modifier = Modifier.padding(end = 8.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                        ) {
-                            Canvas(modifier = Modifier.size(8.dp)) {
-                                drawCircle(color = if (hasCarrier) Color(0xFF00E599) else Color(0xFF757575))
+                    if (hasCarrier) {
+                        val formatBadge = when (activeMode) {
+                            AppMode.INJECT -> {
+                                if (carrierType == CarrierType.IMAGE) carrierFormatBadge ?: "PNG"
+                                else carrierFormatBadge ?: "WAV"
                             }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = if (hasCarrier) "Ready" else "No Carrier",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Medium,
-                                color = if (hasCarrier) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            AppMode.EXTRACT -> {
+                                if (extractCarrierType == CarrierType.IMAGE) extractCarrierFormatBadge ?: "PNG"
+                                else extractCarrierFormatBadge ?: "WAV"
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.padding(end = 8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Canvas(modifier = Modifier.size(8.dp)) {
+                                    drawCircle(color = Color(0xFF00E599))
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Ready  $formatBadge",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
                         }
                     }
 
                     IconButton(
-                        onClick = { showAboutScreen = true },
+                        onClick = onOpenAbout,
                         modifier = Modifier.padding(end = 8.dp)
                     ) {
                         Icon(
@@ -580,9 +678,9 @@ fun MainScreen() {
                                         Button(
                                             onClick = {
                                                 if (carrierType == CarrierType.IMAGE) {
-                                                    injectCarrierPicker.launch("image/*")
+                                                    injectCarrierPicker.launch(arrayOf("image/png", "image/webp", "image/bmp", "image/*"))
                                                 } else {
-                                                    injectCarrierPicker.launch("audio/*")
+                                                    injectCarrierPicker.launch(arrayOf("audio/wav", "audio/x-wav", "audio/flac", "audio/x-flac", "audio/*"))
                                                 }
                                             },
                                             modifier = Modifier.weight(1f),
@@ -620,6 +718,7 @@ fun MainScreen() {
                                                     val wav = AudioLsbEngine.createSyntheticWav(sampleCount = 88200)
                                                     carrierWavBytes = wav
                                                     carrierFileName = "synthetic_44khz_2s.wav"
+                                                    carrierFormatBadge = "WAV"
                                                 }
                                             },
                                             shape = RoundedCornerShape(28.dp)
@@ -1078,18 +1177,46 @@ fun MainScreen() {
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
 
-                                        Button(
-                                            onClick = {
-                                                saveInjectedFilePicker.launch(
-                                                    if (carrierType == CarrierType.IMAGE) "stego_image.png" else "stego_audio.wav"
-                                                )
-                                            },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            shape = RoundedCornerShape(28.dp)
-                                        ) {
-                                            Icon(Icons.Default.Download, contentDescription = null)
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text("Save File")
+                                        if (carrierType == CarrierType.IMAGE) {
+                                            Button(
+                                                onClick = {
+                                                    saveInjectedFilePicker.launch("stego_image.png")
+                                                },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                shape = RoundedCornerShape(28.dp)
+                                            ) {
+                                                Icon(Icons.Default.Download, contentDescription = null)
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text("Save File (PNG)")
+                                            }
+                                        } else {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                            ) {
+                                                Button(
+                                                    onClick = {
+                                                        saveInjectedWavPicker.launch("stego_audio.wav")
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(28.dp)
+                                                ) {
+                                                    Icon(Icons.Default.Download, contentDescription = null)
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Text("Save WAV")
+                                                }
+                                                Button(
+                                                    onClick = {
+                                                        saveInjectedFlacPicker.launch("stego_audio.flac")
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(28.dp)
+                                                ) {
+                                                    Icon(Icons.Default.Download, contentDescription = null)
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Text("Save FLAC")
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1121,7 +1248,7 @@ fun MainScreen() {
                                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                                     ) {
                                         Button(
-                                            onClick = { extractCarrierPicker.launch("*/*") },
+                                            onClick = { extractCarrierPicker.launch(arrayOf("*/*")) },
                                             modifier = Modifier.weight(1f),
                                             shape = RoundedCornerShape(28.dp),
                                             colors = ButtonDefaults.buttonColors(
@@ -1142,12 +1269,14 @@ fun MainScreen() {
                                                         extractCarrierWavBytes = null
                                                         extractCarrierType = CarrierType.IMAGE
                                                         extractCarrierFileName = "injected_image.png"
+                                                        extractCarrierFormatBadge = "PNG"
                                                         bitPlaneBitmap = ImageLsbEngine.generateBitPlane(injectedBitmap!!, bitPlaneIndex)
                                                     } else if (carrierType == CarrierType.AUDIO && injectedWavBytes != null) {
                                                         extractCarrierWavBytes = injectedWavBytes
                                                         extractCarrierBitmap = null
                                                         extractCarrierType = CarrierType.AUDIO
                                                         extractCarrierFileName = "injected_audio.wav"
+                                                        extractCarrierFormatBadge = "WAV"
                                                     }
                                                 },
                                                 shape = RoundedCornerShape(28.dp)
