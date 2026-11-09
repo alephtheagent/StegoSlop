@@ -8,6 +8,7 @@ import com.p0lymatic.stegoslop.core.PayloadType
 import com.p0lymatic.stegoslop.core.StegoProtocol
 import com.p0lymatic.stegoslop.core.CamouflagePreset
 import com.p0lymatic.stegoslop.core.CamouflageUtils
+import com.p0lymatic.stegoslop.core.ZeroWidthStego
 import com.p0lymatic.stegoslop.core.generateDecoyName
 import com.p0lymatic.stegoslop.core.randomizeDecoyName
 import org.junit.Assert.assertArrayEquals
@@ -77,6 +78,45 @@ class StegoEngineTest {
         assertTrue(decryptedUnpacked.isEncrypted)
     }
 
+
+    @Test
+    fun testZeroWidthStegoPlainRoundtrip() {
+        val coverText = "Привет, как твои дела? Встретимся завтра в кафе."
+        val secretMessage = "Top Secret Zero-Width Message 12345! @#$%"
+        val secretBytes = secretMessage.toByteArray(Charsets.UTF_8)
+
+        val stegoText = ZeroWidthStego.encode(coverText, secretBytes)
+        assertTrue(ZeroWidthStego.hasHiddenData(stegoText))
+
+        val decodedBytes = ZeroWidthStego.decode(stegoText)
+        val decodedMessage = String(decodedBytes, Charsets.UTF_8)
+        assertEquals(secretMessage, decodedMessage)
+    }
+
+    @Test
+    fun testZeroWidthStegoEncryptedRoundtrip() {
+        val coverText = "Short cover"
+        val secretMessage = "AES-256-GCM Encrypted Zero-Width Payload"
+        val secretBytes = secretMessage.toByteArray(Charsets.UTF_8)
+        val password = "SuperSecretPassword2026"
+
+        val stegoText = ZeroWidthStego.encode(coverText, secretBytes, password = password)
+        assertTrue(ZeroWidthStego.hasHiddenData(stegoText))
+
+        // Without password must throw
+        assertThrows(IllegalArgumentException::class.java) {
+            ZeroWidthStego.decode(stegoText, password = null)
+        }
+
+        // With wrong password must throw
+        assertThrows(IllegalArgumentException::class.java) {
+            ZeroWidthStego.decode(stegoText, password = "WrongPassword")
+        }
+
+        // With correct password must decrypt
+        val decodedBytes = ZeroWidthStego.decode(stegoText, password = password)
+        assertEquals(secretMessage, String(decodedBytes, Charsets.UTF_8))
+    }
     @Test
     fun testProtocolEncryptionDecryption() {
         val secretMessage = "Confidential payload secured with AES-256-GCM"
