@@ -7,9 +7,9 @@ import java.nio.ByteOrder
  * Zero-Width Unicode Steganography engine for hiding secret data inside visible text.
  */
 object ZeroWidthStego {
-    const val CHAR_ZERO = '\u200B'    // Bit 0 (Zero-Width Space)
-    const val CHAR_ONE = '\u200C'     // Bit 1 (Zero-Width Non-Joiner)
-    const val CHAR_DELIM = '\u200D'   // Delimiter / Separator (Zero-Width Joiner)
+    const val CHAR_ZERO = '\u200C'    // Bit 0 (Zero-Width Non-Joiner, survives Telegram/chat sanitizers)
+    const val CHAR_ONE = '\u200D'     // Bit 1 (Zero-Width Joiner, survives Telegram/chat sanitizers)
+    const val CHAR_DELIM = '\u2060'   // Delimiter / Separator (Word Joiner, survives Telegram)
     const val CHAR_HEADER = '\uFEFF'  // Magic Header (Zero-Width No-Break Space)
 
     val SIGNATURE = byteArrayOf(0x53, 0x4C, 0x4F, 0x50) // "SLOP"
