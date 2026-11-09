@@ -74,3 +74,22 @@ Strategic engineering plan for StegoSlop steganography expansion.
   - Injects a single encrypted/visual frame at 60 FPS (imperceptible during normal playback, extractable deterministically by frame index).
 - **Subtitle Stream Stego:**
   - Injects Zero-Width Unicode or homoglyph payloads inside embedded subtitle tracks (`.srt`, `.vtt`, SSA/ASS).
+
+---
+
+## 8. Anti-Forensic Camouflage & Filename Masquerading (`Decoy-Naming`)
+- **Realistic OS & Social Media Preset Chips:**
+  - One-tap preset chips below the save filename field to masquerade carriers as mundane daily files:
+    - **Android/iOS Screenshot:** `Снимок экрана ГГГГ-ММ-ДД в ЧЧ.ММ.СС.png` or `Screenshot_YYYYMMDD-HHMMSS.png`
+    - **Camera DCIM:** `IMG_YYYYMMDD_HHMMSS.png` or `IMG_0001..9999.png`
+    - **YouTube Thumbnail:** `maxresdefault.png` / `hqdefault.png`
+    - **Telegram Photo:** `photo_YYYY-MM-DD_HH-MM-SS.png`
+    - **VK / Social Hash:** `vk_photo_c3f819b2.png` or CDN hash style
+    - **WhatsApp Media:** `IMG-YYYYMMDD-WA0001.png` / `AUD-YYYYMMDD-WA0001.wav`
+    - **Generic Defaults:** `image.png`, `audio.wav`, `track_01.flac`
+- **Dynamic Randomizer & Timestamp Synthesis:**
+  - Dice icon button to randomize timestamps and sequential counter IDs (`0001..9999`).
+- **File System Last-Modified Timestamp Spoofing (mtime):**
+  - Synchronizes the saved file's OS last-modified timestamp with the fake date generated in the filename, placing it seamlessly into historical positions in the user's gallery / downloads list.
+- **Custom Editable Text Field:**
+  - Free-form manual editing with live extension guard.
