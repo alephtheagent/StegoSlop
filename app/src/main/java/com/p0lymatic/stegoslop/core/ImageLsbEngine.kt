@@ -52,6 +52,51 @@ object ImageLsbEngine {
     }
 
     /**
+     * Dumps raw LSB bits sequentially without header checks.
+     */
+    fun extractRawBits(bitmap: Bitmap, bitsPerChannel: Int = 1, maxBytes: Int = 262144): ByteArray {
+        require(bitmap.config == Bitmap.Config.ARGB_8888) { "Bitmap must be ARGB_8888 format" }
+        val width = bitmap.width
+        val height = bitmap.height
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+        return extractRawBitsFromPixels(pixels, bitsPerChannel, maxBytes)
+    }
+
+    /**
+     * Dumps raw LSB bits sequentially from pixel array without header checks.
+     */
+    fun extractRawBitsFromPixels(pixels: IntArray, bitsPerChannel: Int = 1, maxBytes: Int = 262144): ByteArray {
+        require(bitsPerChannel in listOf(1, 2, 4)) { "bitsPerChannel must be 1, 2, or 4" }
+        val totalChannels = pixels.size.toLong() * 3
+        val capacity = (totalChannels * bitsPerChannel / 8).toInt()
+        val bytesToExtract = minOf(capacity, maxBytes)
+        if (bytesToExtract <= 0) return ByteArray(0)
+
+        val chunksPerByte = 8 / bitsPerChannel
+        val mask = (1 shl bitsPerChannel) - 1
+        var channelCount = 0
+        val result = ByteArray(bytesToExtract)
+
+        for (i in 0 until bytesToExtract) {
+            var byteVal = 0
+            for (c in 0 until chunksPerByte) {
+                val pixel = pixels[channelCount / 3]
+                val channelVal = when (channelCount % 3) {
+                    0 -> (pixel ushr 16) and 0xFF
+                    1 -> (pixel ushr 8) and 0xFF
+                    else -> pixel and 0xFF
+                }
+                val chunk = channelVal and mask
+                byteVal = (byteVal shl bitsPerChannel) or chunk
+                channelCount++
+            }
+            result[i] = byteVal.toByte()
+        }
+        return result
+    }
+
+    /**
      * Generates a visual grayscale Bitmap showing the specified bit plane (amplified to 0 or 255)
      * for X-Ray inspection.
      */

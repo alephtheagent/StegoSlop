@@ -29,8 +29,10 @@ data class UnpackedPayload(
     val data: ByteArray,
     val isEncrypted: Boolean = false,
     val bitsPerUnit: Int = 1,
-    val fileName: String? = null
+    val fileName: String? = null,
+    val isCorrupted: Boolean = false
 ) {
+    val crcMismatch: Boolean get() = isCorrupted
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
@@ -40,6 +42,7 @@ data class UnpackedPayload(
         if (isEncrypted != other.isEncrypted) return false
         if (bitsPerUnit != other.bitsPerUnit) return false
         if (fileName != other.fileName) return false
+        if (isCorrupted != other.isCorrupted) return false
         return true
     }
 
@@ -47,8 +50,8 @@ data class UnpackedPayload(
         var result = type.hashCode()
         result = 31 * result + data.contentHashCode()
         result = 31 * result + isEncrypted.hashCode()
-        result = 31 * result + bitsPerUnit
         result = 31 * result + (fileName?.hashCode() ?: 0)
+        result = 31 * result + isCorrupted.hashCode()
         return result
     }
 }
@@ -222,7 +225,109 @@ object StegoProtocol {
             data = data,
             isEncrypted = isEncrypted,
             bitsPerUnit = bitsPerUnit,
-            fileName = fileName
+            fileName = fileName,
+            isCorrupted = false
+        )
+    }
+
+    /**
+     * Force-unpacks a StegoSlop container, ignoring CRC32 mismatch errors.
+     * Returns data with isCorrupted = true instead of throwing when CRC fails.
+     */
+    fun unpackPayloadForced(
+        containerBytes: ByteArray,
+        password: String? = null
+    ): UnpackedPayload {
+        if (containerBytes.size < HEADER_MIN_LENGTH) {
+            return UnpackedPayload(
+                type = PayloadType.FILE,
+                data = containerBytes,
+                isCorrupted = true
+            )
+        }
+
+        val buffer = ByteBuffer.wrap(containerBytes).order(ByteOrder.BIG_ENDIAN)
+
+        val magic = ByteArray(4)
+        buffer.get(magic)
+        val hasValidMagic = magic.contentEquals(MAGIC_BYTES)
+
+        val type = try {
+            PayloadType.fromCode(buffer.get())
+        } catch (e: Exception) {
+            PayloadType.FILE
+        }
+
+        val flags = buffer.get().toInt() and 0xFF
+        val isEncrypted = (flags and 0x01) != 0
+        val bpuCode = (flags ushr 1) and 0x03
+        val bitsPerUnit = when (bpuCode) {
+            0 -> 1
+            1 -> 2
+            2 -> 4
+            else -> 1
+        }
+
+        val payloadLength = buffer.int.toLong() and 0xFFFFFFFFL
+        val expectedCrc = buffer.int.toLong() and 0xFFFFFFFFL
+
+        val salt = if (isEncrypted) {
+            if (buffer.remaining() >= SALT_LENGTH) {
+                ByteArray(SALT_LENGTH).also { buffer.get(it) }
+            } else null
+        } else null
+
+        val iv = if (isEncrypted) {
+            if (buffer.remaining() >= IV_LENGTH) {
+                ByteArray(IV_LENGTH).also { buffer.get(it) }
+            } else null
+        } else null
+
+        val fileName = if ((flags and FLAG_HAS_FILENAME) != 0) {
+            if (buffer.remaining() >= 1) {
+                val fileNameLen = buffer.get().toInt() and 0xFF
+                if (buffer.remaining() >= fileNameLen) {
+                    val fileNameBytes = ByteArray(fileNameLen)
+                    buffer.get(fileNameBytes)
+                    String(fileNameBytes, Charsets.UTF_8)
+                } else null
+            } else null
+        } else null
+
+        val available = buffer.remaining()
+        val bytesToRead = if (payloadLength in 0..available.toLong()) {
+            payloadLength.toInt()
+        } else {
+            available
+        }
+
+        val payloadData = ByteArray(bytesToRead)
+        buffer.get(payloadData)
+
+        val actualCrc = CRC32().apply { update(payloadData) }.value
+        val crcMismatch = (actualCrc != expectedCrc) || !hasValidMagic || (payloadLength.toInt() != bytesToRead)
+
+        val data = if (isEncrypted && salt != null && iv != null) {
+            if (!password.isNullOrEmpty()) {
+                try {
+                    CryptoUtils.decrypt(payloadData, password, salt, iv)
+                } catch (e: Exception) {
+                    payloadData
+                }
+            } else {
+                payloadData
+            }
+        } else {
+            payloadData
+        }
+
+        return UnpackedPayload(
+            type = type,
+            data = data,
+            isEncrypted = isEncrypted,
+            bitsPerUnit = bitsPerUnit,
+            fileName = fileName,
+            isCorrupted = crcMismatch
         )
     }
 }

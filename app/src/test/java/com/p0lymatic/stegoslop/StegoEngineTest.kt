@@ -297,6 +297,50 @@ class StegoEngineTest {
     }
 
     @Test
+    fun testRawBitExtractionImageAndAudio() {
+        val sampleCount = 4000
+        val wavBytes = AudioLsbEngine.createSyntheticWav(sampleCount = sampleCount)
+        val secretText = "Raw bit extraction test payload"
+        val container = StegoProtocol.packPayload(PayloadType.TEXT, secretText.toByteArray(Charsets.UTF_8))
+        val embeddedWav = AudioLsbEngine.embed(wavBytes, container, bitsPerSample = 1)
+
+        val rawAudioBits = AudioLsbEngine.extractRawBits(embeddedWav, bitsPerSample = 1, maxBytes = container.size)
+        assertArrayEquals(container, rawAudioBits)
+
+        val pixelCount = 2000
+        val pixels = IntArray(pixelCount) { 0xFF112233.toInt() }
+        val embeddedPixels = ImageLsbEngine.embedInPixels(pixels, container, bitsPerChannel = 1)
+        val rawImageBits = ImageLsbEngine.extractRawBitsFromPixels(embeddedPixels, bitsPerChannel = 1, maxBytes = container.size)
+        assertArrayEquals(container, rawImageBits)
+    }
+
+    @Test
+    fun testForcedUnpackOfCorruptedPayload() {
+        val originalText = "Original confidential text before bit-rot"
+        val payloadData = originalText.toByteArray(Charsets.UTF_8)
+        val packed = StegoProtocol.packPayload(
+            type = PayloadType.TEXT,
+            data = payloadData,
+            password = null,
+            bitsPerUnit = 1
+        )
+
+        val corrupted = packed.copyOf()
+        val corruptIndex = corrupted.size - 1
+        corrupted[corruptIndex] = (corrupted[corruptIndex].toInt() xor 0x01).toByte()
+
+        assertThrows(IllegalArgumentException::class.java) {
+            StegoProtocol.unpackPayload(corrupted)
+        }
+
+        val forcedUnpack = StegoProtocol.unpackPayloadForced(corrupted)
+        assertEquals(PayloadType.TEXT, forcedUnpack.type)
+        assertTrue("Expected isCorrupted to be true", forcedUnpack.isCorrupted)
+        assertTrue("Expected crcMismatch to be true", forcedUnpack.crcMismatch)
+        assertEquals(payloadData.size, forcedUnpack.data.size)
+    }
+
+    @Test
     fun testAudioCodecBridgeIsFlac() {
         val flacHeader = byteArrayOf('f'.code.toByte(), 'L'.code.toByte(), 'a'.code.toByte(), 'C'.code.toByte(), 0x00, 0x01)
         assertTrue(AudioCodecBridge.isFlac(flacHeader))

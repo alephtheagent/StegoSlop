@@ -229,6 +229,40 @@ object AudioLsbEngine {
     }
 
     /**
+     * Dumps raw LSB bits from PCM data sequentially without header checks.
+     */
+    fun extractRawBits(wavBytes: ByteArray, bitsPerSample: Int = 1, maxBytes: Int = 262144): ByteArray {
+        require(bitsPerSample in listOf(1, 2, 4)) { "bitsPerSample must be 1, 2, or 4" }
+        val info = parseWav(wavBytes)
+        val sampleCount = info.dataSize / 2
+        val capacity = (sampleCount.toLong() * bitsPerSample / 8).toInt()
+        val bytesToExtract = minOf(capacity, maxBytes)
+        if (bytesToExtract <= 0) return ByteArray(0)
+
+        val chunksPerByte = 8 / bitsPerSample
+        val mask = (1 shl bitsPerSample) - 1
+        var sampleIdx = 0
+        val result = ByteArray(bytesToExtract)
+
+        for (i in 0 until bytesToExtract) {
+            var byteVal = 0
+            for (c in 0 until chunksPerByte) {
+                val byteOffset = info.dataOffset + sampleIdx * 2
+                val low = wavBytes[byteOffset].toInt() and 0xFF
+                val high = wavBytes[byteOffset + 1].toInt() and 0xFF
+                val sample = low or (high shl 8)
+
+                val chunk = sample and mask
+                byteVal = (byteVal shl bitsPerSample) or chunk
+                sampleIdx++
+            }
+            result[i] = byteVal.toByte()
+        }
+
+        return result
+    }
+
+    /**
      * Generates a synthetic 16-bit PCM RIFF WAV in memory for testing and previews.
      */
     fun createSyntheticWav(sampleCount: Int, sampleRate: Int = 44100, numChannels: Int = 1): ByteArray {
