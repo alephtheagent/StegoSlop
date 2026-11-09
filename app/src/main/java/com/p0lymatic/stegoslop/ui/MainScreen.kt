@@ -10,6 +10,7 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -189,6 +190,7 @@ private fun MainScreenContent(
     var secretText by remember { mutableStateOf("") }
     var payloadFileBytes by remember { mutableStateOf<ByteArray?>(null) }
     var payloadFileName by remember { mutableStateOf<String?>(null) }
+    var preserveFileName by remember { mutableStateOf(true) }
 
     // Security state
     var encryptEnabled by remember { mutableStateOf(false) }
@@ -283,8 +285,14 @@ private fun MainScreenContent(
                 try {
                     val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                     if (bytes != null) {
+                        val resolvedName = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                            if (nameIndex != -1 && cursor.moveToFirst()) {
+                                cursor.getString(nameIndex)
+                            } else null
+                        } ?: uri.lastPathSegment ?: "secret_file.bin"
                         payloadFileBytes = bytes
-                        payloadFileName = "secret_file.bin"
+                        payloadFileName = resolvedName
                     }
                 } catch (e: Exception) {
                     statusMessage = "Failed to load payload file: ${e.message}"
@@ -459,10 +467,13 @@ private fun MainScreenContent(
         }
     }
 
-    val estimatedContainerSize = remember(rawPayloadBytes, encryptEnabled) {
+    val estimatedContainerSize = remember(rawPayloadBytes, encryptEnabled, preserveFileName, payloadFileName, payloadTab) {
         if (rawPayloadBytes.isEmpty()) 0
         else {
-            val headerSize = StegoProtocol.HEADER_MIN_LENGTH + (if (encryptEnabled) 28 else 0)
+            val fileNameBytesLen = if (payloadTab == PayloadTab.FILE && preserveFileName && payloadFileName != null) {
+                1 + payloadFileName!!.toByteArray(Charsets.UTF_8).size
+            } else 0
+            val headerSize = StegoProtocol.HEADER_MIN_LENGTH + (if (encryptEnabled) 28 else 0) + fileNameBytesLen
             val dataSize = rawPayloadBytes.size + (if (encryptEnabled) 16 else 0)
             headerSize + dataSize
         }
@@ -895,6 +906,20 @@ private fun MainScreenContent(
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                             }
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = "Preserve original filename",
+                                                    style = MaterialTheme.typography.bodyMedium
+                                                )
+                                                Switch(
+                                                    checked = preserveFileName,
+                                                    onCheckedChange = { preserveFileName = it }
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1094,7 +1119,8 @@ private fun MainScreenContent(
                                                     type = type,
                                                     data = rawPayloadBytes,
                                                     password = if (encryptEnabled) password else null,
-                                                    bitsPerUnit = bitsPerUnit
+                                                    bitsPerUnit = bitsPerUnit,
+                                                    fileName = if (type == PayloadType.FILE && preserveFileName) payloadFileName else null
                                                 )
                                             }
 
@@ -1790,12 +1816,12 @@ private fun MainScreenContent(
                                             }
                                             PayloadType.FILE -> {
                                                 Text(
-                                                    text = "Binary File: ${formatBytes(payload.data.size)}",
+                                                    text = "Binary File: ${payload.fileName ?: "extracted_file.bin"} (${formatBytes(payload.data.size)})",
                                                     style = MaterialTheme.typography.bodyMedium
                                                 )
 
                                                 Button(
-                                                    onClick = { saveExtractedFilePicker.launch("extracted_file.bin") },
+                                                    onClick = { saveExtractedFilePicker.launch(payload.fileName ?: "extracted_file.bin") },
                                                     modifier = Modifier.fillMaxWidth(),
                                                     shape = RoundedCornerShape(28.dp)
                                                 ) {
