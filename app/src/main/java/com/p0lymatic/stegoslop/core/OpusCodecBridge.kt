@@ -2,6 +2,7 @@ package com.p0lymatic.stegoslop.core
 
 import android.content.Context
 import android.media.MediaCodec
+import android.media.MediaCodecInfo
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
@@ -17,7 +18,7 @@ import java.nio.ByteOrder
  */
 enum class OpusProfile {
     VOICE,  // Voice / speech profile (target 8..24 kbps)
-    MUSIC   // Full-band music profile (target 32..96 kbps)
+    MUSIC   // Full-band music profile (target 16..96 kbps)
 }
 
 /**
@@ -30,26 +31,27 @@ object OpusCodecBridge {
 
     /**
      * Calculates the target bitrate in bits per second (bps) adapted to carrier capacity.
-     * Formula: (availableCapacityBytes * 8 / durationSeconds).toInt()
+     * Formula incorporates 30% safety headroom: ((availableCapacityBytes * 0.70 * 8) / durationSeconds).toInt()
      * For VOICE: clamp between 8_000 and 24_000 bps.
-     * For MUSIC: clamp between 24_000 and 96_000 bps.
+     * For MUSIC: clamp between 16_000 and 96_000 bps.
      */
     fun calculateTargetBitrate(
         durationSeconds: Double,
         availableCapacityBytes: Int,
         profile: OpusProfile
     ): Int {
+        val safeCapacity = availableCapacityBytes.coerceAtLeast(0) * 0.70
         val rawBitrate = if (durationSeconds > 0.0 && !durationSeconds.isNaN()) {
-            ((availableCapacityBytes.toLong() * 8L) / durationSeconds).toInt()
+            ((safeCapacity * 8.0) / durationSeconds).toInt()
         } else {
             when (profile) {
                 OpusProfile.VOICE -> 8_000
-                OpusProfile.MUSIC -> 24_000
+                OpusProfile.MUSIC -> 16_000
             }
         }
         return when (profile) {
             OpusProfile.VOICE -> rawBitrate.coerceIn(8_000, 24_000)
-            OpusProfile.MUSIC -> rawBitrate.coerceIn(24_000, 96_000)
+            OpusProfile.MUSIC -> rawBitrate.coerceIn(16_000, 96_000)
         }
     }
 
@@ -200,6 +202,12 @@ object OpusCodecBridge {
                 val muxer = MediaMuxer(tempOutputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_OGG)
                 val format = MediaFormat.createAudioFormat(OPUS_MIME, sampleRate, channels).apply {
                     setInteger(MediaFormat.KEY_BIT_RATE, bitrateBps)
+                    try {
+                        setInteger(
+                            MediaFormat.KEY_BITRATE_MODE,
+                            MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+                        )
+                    } catch (_: Throwable) {}
                     if (profile == OpusProfile.VOICE) {
                         setInteger(MediaFormat.KEY_COMPLEXITY, 5)
                     } else {
@@ -208,7 +216,23 @@ object OpusCodecBridge {
                 }
 
                 val encoder = MediaCodec.createEncoderByType(OPUS_MIME)
-                encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                try {
+                    encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                } catch (_: Throwable) {
+                    try {
+                        format.setInteger(
+                            MediaFormat.KEY_BITRATE_MODE,
+                            MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
+                        )
+                        encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                    } catch (_: Throwable) {
+                        val fallbackFormat = MediaFormat.createAudioFormat(OPUS_MIME, sampleRate, channels).apply {
+                            setInteger(MediaFormat.KEY_BIT_RATE, bitrateBps)
+                            setInteger(MediaFormat.KEY_COMPLEXITY, if (profile == OpusProfile.VOICE) 5 else 10)
+                        }
+                        encoder.configure(fallbackFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                    }
+                }
                 encoder.start()
 
                 var trackIndex = -1
@@ -294,6 +318,91 @@ object OpusCodecBridge {
             }
         } catch (_: Throwable) {
             pcmBytes
+        }
+    }
+    /**
+     * Encodes 16-bit PCM bytes to Opus Ogg, guaranteeing the returned byte array is <= [maxAllowedBytes].
+     * If the encoded size exceeds [maxAllowedBytes], retries iteratively at a reduced bitrate.
+     * If the minimum bitrate is reached and the payload still exceeds capacity, trims trailing PCM
+     * samples until it fits.
+     */
+    fun encodeToOpusPcmGuaranteed(
+        context: Context,
+        pcmBytes: ByteArray,
+        sampleRate: Int,
+        channels: Int,
+        bitrateBps: Int,
+        profile: OpusProfile,
+        maxAllowedBytes: Int
+    ): ByteArray {
+        if (pcmBytes.isEmpty() || maxAllowedBytes <= 0) return ByteArray(0)
+
+        val minBitrate = when (profile) {
+            OpusProfile.VOICE -> 8_000
+            OpusProfile.MUSIC -> 16_000
+        }
+
+        var currentBitrate = bitrateBps.coerceIn(minBitrate, 96_000)
+        var currentPcm = if (isWav(pcmBytes)) {
+            try {
+                val info = AudioLsbEngine.parseWav(pcmBytes)
+                pcmBytes.copyOfRange(info.dataOffset, info.dataOffset + info.dataSize)
+            } catch (_: Throwable) {
+                pcmBytes
+            }
+        } else {
+            pcmBytes
+        }
+
+        var encoded = encodeToOpusPcm(
+            context = context,
+            pcmBytes = currentPcm,
+            sampleRate = sampleRate,
+            channels = channels,
+            bitrateBps = currentBitrate,
+            profile = profile
+        )
+
+        val maxAttempts = 10
+        var attempt = 0
+
+        while (encoded.size > maxAllowedBytes && attempt < maxAttempts) {
+            attempt++
+            if (currentBitrate > minBitrate) {
+                val reduced = (currentBitrate.toDouble() * maxAllowedBytes.toDouble() * 0.90 / encoded.size.toDouble()).toInt()
+                currentBitrate = maxOf(minBitrate, minOf(currentBitrate - 1_000, reduced))
+            } else {
+                // At minimum bitrate: trim trailing PCM samples and re-encode
+                val bytesPerFrame = maxOf(1, channels) * 2
+                val totalFrames = currentPcm.size / bytesPerFrame
+                val currentDuration = totalFrames.toDouble() / maxOf(1, sampleRate)
+                if (currentDuration <= 0.2) {
+                    break
+                }
+                val ratio = (maxAllowedBytes.toDouble() * 0.90) / encoded.size.toDouble()
+                val targetDuration = currentDuration * ratio
+                val trimAmountSec = maxOf(1.0, currentDuration - targetDuration)
+                val newDuration = maxOf(0.1, currentDuration - trimAmountSec)
+                currentPcm = trimPcm(currentPcm, sampleRate, channels, 0.0, newDuration)
+                if (currentPcm.isEmpty()) {
+                    break
+                }
+            }
+
+            encoded = encodeToOpusPcm(
+                context = context,
+                pcmBytes = currentPcm,
+                sampleRate = sampleRate,
+                channels = channels,
+                bitrateBps = currentBitrate,
+                profile = profile
+            )
+        }
+
+        return if (encoded.size <= maxAllowedBytes) {
+            encoded
+        } else {
+            encoded.copyOf(maxAllowedBytes)
         }
     }
 

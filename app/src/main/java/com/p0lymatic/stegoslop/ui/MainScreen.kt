@@ -616,7 +616,7 @@ private fun MainScreenContent(
         if (payloadTab != PayloadTab.AUDIO || payloadAudioRawPcmWav == null) 0
         else {
             val dur = maxOf(0.1, trimEndSeconds - trimStartSeconds)
-            ((targetBitrateBps.toLong() * dur) / 8.0).toInt().coerceAtLeast(100)
+            (((targetBitrateBps.toLong() * dur) / 8.0) * 1.25).toInt().coerceAtLeast(100)
         }
     }
 
@@ -1566,13 +1566,15 @@ private fun MainScreenContent(
                                                                 availableCapacityBytes = if (availableCapacity in 1..Int.MAX_VALUE - 1000) availableCapacity - 64 else 32_000,
                                                                 profile = opusProfile
                                                             )
-                                                            OpusCodecBridge.encodeToOpusPcm(
+                                                            val maxPayloadAllowed = maxOf(0, availableCapacity - StegoProtocol.HEADER_MIN_LENGTH - 64)
+                                                            OpusCodecBridge.encodeToOpusPcmGuaranteed(
                                                                 context = context,
                                                                 pcmBytes = trimmedPcm,
                                                                 sampleRate = info.sampleRate,
                                                                 channels = info.numChannels,
                                                                 bitrateBps = bitrate,
-                                                                profile = opusProfile
+                                                                profile = opusProfile,
+                                                                maxAllowedBytes = maxPayloadAllowed
                                                             )
                                                         }
                                                     }

@@ -435,7 +435,7 @@ class StegoEngineTest {
 
     @Test
     fun testCalculateTargetBitrateVoiceProfile() {
-        // Small capacity: raw = 1000 * 8 / 10.0 = 800 bps -> clamps to 8_000
+        // Small capacity: raw = 1000 * 0.70 * 8 / 10.0 = 560 bps -> clamps to 8_000
         val lowBitrate = OpusCodecBridge.calculateTargetBitrate(
             durationSeconds = 10.0,
             availableCapacityBytes = 1_000,
@@ -443,15 +443,15 @@ class StegoEngineTest {
         )
         assertEquals(8_000, lowBitrate)
 
-        // Medium capacity: raw = 10_000 * 8 / 5.0 = 16_000 bps -> 16_000
+        // Medium capacity: raw = 10_000 * 0.70 * 8 / 5.0 = 11_200 bps -> 11_200
         val midBitrate = OpusCodecBridge.calculateTargetBitrate(
             durationSeconds = 5.0,
             availableCapacityBytes = 10_000,
             profile = OpusProfile.VOICE
         )
-        assertEquals(16_000, midBitrate)
+        assertEquals(11_200, midBitrate)
 
-        // High capacity: raw = 100_000 * 8 / 5.0 = 160_000 bps -> clamps to 24_000
+        // High capacity: raw = 100_000 * 0.70 * 8 / 5.0 = 112_000 bps -> clamps to 24_000
         val highBitrate = OpusCodecBridge.calculateTargetBitrate(
             durationSeconds = 5.0,
             availableCapacityBytes = 100_000,
@@ -470,23 +470,23 @@ class StegoEngineTest {
 
     @Test
     fun testCalculateTargetBitrateMusicProfile() {
-        // Small capacity: raw = 1000 * 8 / 10.0 = 800 bps -> clamps to 24_000
+        // Small capacity: raw = 1000 * 0.70 * 8 / 10.0 = 560 bps -> clamps to 16_000
         val lowBitrate = OpusCodecBridge.calculateTargetBitrate(
             durationSeconds = 10.0,
             availableCapacityBytes = 1_000,
             profile = OpusProfile.MUSIC
         )
-        assertEquals(24_000, lowBitrate)
+        assertEquals(16_000, lowBitrate)
 
-        // Medium capacity: raw = 30_000 * 8 / 5.0 = 48_000 bps -> 48_000
+        // Medium capacity: raw = 30_000 * 0.70 * 8 / 5.0 = 33_600 bps -> 33_600
         val midBitrate = OpusCodecBridge.calculateTargetBitrate(
             durationSeconds = 5.0,
             availableCapacityBytes = 30_000,
             profile = OpusProfile.MUSIC
         )
-        assertEquals(48_000, midBitrate)
+        assertEquals(33_600, midBitrate)
 
-        // High capacity: raw = 200_000 * 8 / 5.0 = 320_000 bps -> clamps to 96_000
+        // High capacity: raw = 200_000 * 0.70 * 8 / 5.0 = 224_000 bps -> clamps to 96_000
         val highBitrate = OpusCodecBridge.calculateTargetBitrate(
             durationSeconds = 5.0,
             availableCapacityBytes = 200_000,
@@ -500,7 +500,7 @@ class StegoEngineTest {
             availableCapacityBytes = 50_000,
             profile = OpusProfile.MUSIC
         )
-        assertEquals(24_000, zeroDurBitrate)
+        assertEquals(16_000, zeroDurBitrate)
     }
 
     @Test
