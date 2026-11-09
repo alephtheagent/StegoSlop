@@ -32,6 +32,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -50,6 +51,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
@@ -101,6 +103,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.p0lymatic.stegoslop.core.CamouflagePreset
+import com.p0lymatic.stegoslop.core.CamouflageUtils
+import com.p0lymatic.stegoslop.core.generateDecoyName
+import com.p0lymatic.stegoslop.core.randomizeDecoyName
 import androidx.compose.ui.unit.sp
 import com.p0lymatic.stegoslop.core.AudioCodecBridge
 import com.p0lymatic.stegoslop.core.AudioLsbEngine
@@ -199,6 +205,9 @@ private fun MainScreenContent(
     // Extract state
     var extractCarrierBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var extractCarrierWavBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var carrierUri by remember { mutableStateOf<Uri?>(null) }
+    var outputFileName by remember { mutableStateOf("") }
+    var overwriteOriginal by remember { mutableStateOf(false) }
     var extractCarrierFileName by remember { mutableStateOf<String?>(null) }
     var extractCarrierFormatBadge by remember { mutableStateOf<String?>(null) }
     var extractCarrierType by remember { mutableStateOf(CarrierType.IMAGE) }
@@ -222,6 +231,7 @@ private fun MainScreenContent(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let {
+            carrierUri = it
             coroutineScope.launch(Dispatchers.IO) {
                 try {
                     val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
@@ -1101,6 +1111,8 @@ private fun MainScreenContent(
                                                 injectedWavBytes = output
                                                 injectedBitmap = null
                                             }
+                                            val ext = if (carrierType == CarrierType.IMAGE) "png" else "wav"
+                                            outputFileName = randomizeDecoyName(carrierType == CarrierType.AUDIO, ext)
 
                                             statusMessage = "Payload injected successfully"
                                             isError = false
@@ -1177,45 +1189,170 @@ private fun MainScreenContent(
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
 
-                                        if (carrierType == CarrierType.IMAGE) {
-                                            Button(
+                                        // File Camouflage Card
+                                        Text(
+                                            text = "File Camouflage",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+
+                                        OutlinedTextField(
+                                            value = outputFileName,
+                                            onValueChange = { outputFileName = it },
+                                            label = { Text("Output Filename") },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true,
+                                            shape = RoundedCornerShape(14.dp),
+                                            trailingIcon = {
+                                                IconButton(onClick = {
+                                                    val ext = if (carrierType == CarrierType.IMAGE) "png" else "wav"
+                                                    outputFileName = randomizeDecoyName(carrierType == CarrierType.AUDIO, ext)
+                                                }) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Casino,
+                                                        contentDescription = "Randomize Decoy Name"
+                                                    )
+                                                }
+                                            }
+                                        )
+
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .horizontalScroll(rememberScrollState()),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            if (carrierType == CarrierType.IMAGE) {
+                                                PillChip(title = "Screenshot") {
+                                                    outputFileName = generateDecoyName(CamouflagePreset.SCREENSHOT, "png")
+                                                }
+                                                PillChip(title = "Camera") {
+                                                    outputFileName = generateDecoyName(CamouflagePreset.CAMERA_DCIM, "png")
+                                                }
+                                                PillChip(title = "YouTube") {
+                                                    outputFileName = generateDecoyName(CamouflagePreset.YOUTUBE, "png")
+                                                }
+                                                PillChip(title = "Telegram") {
+                                                    outputFileName = generateDecoyName(CamouflagePreset.TELEGRAM, "png")
+                                                }
+                                                PillChip(title = "VK Hash") {
+                                                    outputFileName = generateDecoyName(CamouflagePreset.VK_HASH, "png")
+                                                }
+                                                PillChip(title = "Generic") {
+                                                    outputFileName = generateDecoyName(CamouflagePreset.GENERIC, "png")
+                                                }
+                                            } else {
+                                                PillChip(title = "WhatsApp") {
+                                                    outputFileName = generateDecoyName(CamouflagePreset.WHATSAPP, "wav")
+                                                }
+                                                PillChip(title = "Voice") {
+                                                    outputFileName = generateDecoyName(CamouflagePreset.VOICE, "wav")
+                                                }
+                                                PillChip(title = "Track") {
+                                                    outputFileName = generateDecoyName(CamouflagePreset.TRACK, "wav")
+                                                }
+                                                PillChip(title = "Generic") {
+                                                    outputFileName = generateDecoyName(CamouflagePreset.GENERIC, "wav")
+                                                }
+                                            }
+                                        }
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Overwrite Original File",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                            Switch(
+                                                checked = overwriteOriginal,
+                                                onCheckedChange = { overwriteOriginal = it }
+                                            )
+                                        }
+
+                                        if (overwriteOriginal) {
+                                            Text(
+                                                text = "Will replace the original carrier file in-place without creating new files.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+                                        }
+
+                                        Button(
+                                            onClick = {
+                                                if (overwriteOriginal) {
+                                                    if (carrierUri == null) {
+                                                        statusMessage = "Cannot overwrite: Original file URI not available"
+                                                        isError = true
+                                                    } else {
+                                                        coroutineScope.launch(Dispatchers.IO) {
+                                                            try {
+                                                                context.contentResolver.openOutputStream(carrierUri!!)?.use { out ->
+                                                                    if (carrierType == CarrierType.IMAGE && injectedBitmap != null) {
+                                                                        injectedBitmap!!.compress(Bitmap.CompressFormat.PNG, 100, out)
+                                                                    } else if (carrierType == CarrierType.AUDIO && injectedWavBytes != null) {
+                                                                        out.write(injectedWavBytes!!)
+                                                                    }
+                                                                }
+                                                                statusMessage = "Original file overwritten successfully"
+                                                                isError = false
+                                                            } catch (e: Exception) {
+                                                                statusMessage = "Failed to overwrite original file: ${e.message}"
+                                                                isError = true
+                                                            }
+                                                        }
+                                                    }
+                                                } else {
+                                                    val nameToSave = if (outputFileName.isNotBlank()) {
+                                                        outputFileName
+                                                    } else if (carrierType == CarrierType.IMAGE) {
+                                                        "stego_image.png"
+                                                    } else {
+                                                        "stego_audio.wav"
+                                                    }
+                                                    saveInjectedFilePicker.launch(nameToSave)
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            shape = RoundedCornerShape(28.dp),
+                                            colors = if (overwriteOriginal) {
+                                                ButtonDefaults.buttonColors(
+                                                    containerColor = MaterialTheme.colorScheme.error,
+                                                    contentColor = MaterialTheme.colorScheme.onError
+                                                )
+                                            } else {
+                                                ButtonDefaults.buttonColors()
+                                            }
+                                        ) {
+                                            Icon(Icons.Default.Download, contentDescription = null)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(if (overwriteOriginal) "Overwrite Original File" else "Save Stego File")
+                                        }
+
+                                        if (carrierType == CarrierType.AUDIO && !overwriteOriginal) {
+                                            OutlinedButton(
                                                 onClick = {
-                                                    saveInjectedFilePicker.launch("stego_image.png")
+                                                    val flacName = if (outputFileName.isNotBlank()) {
+                                                        if (outputFileName.contains('.')) {
+                                                            outputFileName.substringBeforeLast('.') + ".flac"
+                                                        } else {
+                                                            "$outputFileName.flac"
+                                                        }
+                                                    } else {
+                                                        "stego_audio.flac"
+                                                    }
+                                                    saveInjectedFlacPicker.launch(flacName)
                                                 },
                                                 modifier = Modifier.fillMaxWidth(),
                                                 shape = RoundedCornerShape(28.dp)
                                             ) {
                                                 Icon(Icons.Default.Download, contentDescription = null)
                                                 Spacer(modifier = Modifier.width(8.dp))
-                                                Text("Save File (PNG)")
-                                            }
-                                        } else {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                            ) {
-                                                Button(
-                                                    onClick = {
-                                                        saveInjectedWavPicker.launch("stego_audio.wav")
-                                                    },
-                                                    modifier = Modifier.weight(1f),
-                                                    shape = RoundedCornerShape(28.dp)
-                                                ) {
-                                                    Icon(Icons.Default.Download, contentDescription = null)
-                                                    Spacer(modifier = Modifier.width(8.dp))
-                                                    Text("Save WAV")
-                                                }
-                                                Button(
-                                                    onClick = {
-                                                        saveInjectedFlacPicker.launch("stego_audio.flac")
-                                                    },
-                                                    modifier = Modifier.weight(1f),
-                                                    shape = RoundedCornerShape(28.dp)
-                                                ) {
-                                                    Icon(Icons.Default.Download, contentDescription = null)
-                                                    Spacer(modifier = Modifier.width(8.dp))
-                                                    Text("Save FLAC")
-                                                }
+                                                Text("Save FLAC")
                                             }
                                         }
                                     }
@@ -1771,6 +1908,28 @@ private fun CarrierTypeChip(
             style = MaterialTheme.typography.labelMedium,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+        )
+    }
+}
+
+@Composable
+private fun PillChip(
+    title: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .clickable { onClick() },
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
         )
     }
